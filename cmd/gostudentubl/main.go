@@ -38,7 +38,14 @@ func main() {
 	m.Base.AttendanceFormURL = cfg.AttendanceFormURL
 
 	// wa := &notify.WAClient{Endpoint: cfg.WAEndpoint, Token: cfg.WAToken, Target: cfg.WATarget, HC: hc}
-	r := &runner.Runner{Log: log, M: m, Dry: cfg.DryRun, Conc: cfg.Concurrency, Limiter: rate.NewLimiter(rate.Limit(cfg.RatePerSec), cfg.RateBurst)}
+	r := &runner.Runner{
+		Log:            log,
+		CurrentPeriode: cfg.CurrentPeriode,
+		M:              m,
+		Dry:            cfg.DryRun,
+		Conc:           cfg.Concurrency,
+		Limiter:        rate.NewLimiter(rate.Limit(cfg.RatePerSec), cfg.RateBurst),
+	}
 
 	jobs := schedule.New(cfg.Timezone, log)
 	_ = jobs.Add(cfg.CronWeekday, r)

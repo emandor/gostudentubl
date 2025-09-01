@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
+	// config "github.com/emandor/gostudentubl/internal/config"
 	"github.com/emandor/gostudentubl/internal/moodle"
 )
 
@@ -19,9 +20,10 @@ type Runner struct {
 	M   *moodle.Client
 	// TODO
 	// WA      notify.Notifier
-	Dry     bool
-	Conc    int
-	Limiter *rate.Limiter
+	Dry            bool
+	Conc           int
+	CurrentPeriode string
+	Limiter        *rate.Limiter
 }
 
 func (r *Runner) RunAttendance(ctx context.Context) error {
@@ -37,6 +39,7 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 	// Group/filter by current periode if desired (simple example keeps all)
 	sort.Slice(courses, func(i, j int) bool { return courses[i].CourseName < courses[j].CourseName })
 
+	currentPeriode := r.CurrentPeriode
 	var all []moodle.Attendance
 	for _, c := range courses {
 		// log some info about the course
@@ -44,6 +47,12 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 		ats, err := r.M.GetAttendance(ctx, fmt.Sprintf("%d", c.CourseID))
 		if err != nil {
 			r.Log.Warn().Err(err).Str("course", c.CourseName).Msg("attendance list")
+			continue
+		}
+
+		if c.Periode != currentPeriode {
+			r.Log.Info().Str("course", c.CourseName).Str("periode", c.Periode).Msg("skipping not current periode")
+			r.Log.Info().Msgf("current periode is %q", currentPeriode)
 			continue
 		}
 		for _, a := range ats {

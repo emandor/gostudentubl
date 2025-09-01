@@ -16,6 +16,7 @@ type Config struct {
 	AttendanceListURL string `env:"ATTENDANCE_LIST_URL,required"`
 	AttendanceURL     string `env:"ATTENDANCE_URL,required"`
 	AttendanceFormURL string `env:"ATTENDANCE_FORM_URL,required"`
+	CurrentPeriode    string `env:"CURRENT_PERIODE"`
 
 	WAEndpoint string `env:"WA_ENDPOINT,required"`
 	WAToken    string `env:"WA_TOKEN,required"`
