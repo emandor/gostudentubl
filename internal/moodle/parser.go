@@ -57,7 +57,7 @@ func parseCourses(doc *goquery.Document) ([]Course, error) {
 	return cs, nil
 }
 
-func parseAttendanceList(doc *goquery.Document, courseID string) []Attendance {
+func parseAttendanceList(doc *goquery.Document, cr Course) []Attendance {
 	if strings.TrimSpace(doc.Find("#notice").Text()) == "There are no Attendance in this course" {
 		return nil
 	}
@@ -77,7 +77,7 @@ func parseAttendanceList(doc *goquery.Document, courseID string) []Attendance {
 		if attID == "" {
 			return
 		}
-		out = append(out, Attendance{Title: title, AttendanceName: name, AttendanceLink: link, AttendanceID: attID, CourseID: courseID})
+		out = append(out, Attendance{Title: title, AttendanceName: name, AttendanceLink: link, AttendanceID: attID, Course: cr})
 	})
 	return out
 }

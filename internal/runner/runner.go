@@ -5,21 +5,19 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	// "time"
+	"time"
 
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
-	// config "github.com/emandor/gostudentubl/internal/config"
 	"github.com/emandor/gostudentubl/internal/moodle"
+	"github.com/emandor/gostudentubl/internal/notify"
 )
 
 type Runner struct {
-	Log zerolog.Logger
-	M   *moodle.Client
-	// TODO
-	// WA      notify.Notifier
+	Log            zerolog.Logger
+	M              *moodle.Client
 	Dry            bool
 	Conc           int
 	CurrentPeriode string
@@ -44,7 +42,7 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 	for _, c := range courses {
 		// log some info about the course
 		r.Log.Info().Str("course", c.CourseName).Msg("fetching attendance list")
-		ats, err := r.M.GetAttendance(ctx, fmt.Sprintf("%d", c.CourseID))
+		ats, err := r.M.GetAttendance(ctx, c)
 		if err != nil {
 			r.Log.Warn().Err(err).Str("course", c.CourseName).Msg("attendance list")
 			continue
@@ -65,7 +63,7 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(max(1, r.Conc))
+	g.SetLimit(max(5, r.Conc))
 	for i := range all {
 		a := all[i]
 		g.Go(func() error {
@@ -96,9 +94,17 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 				return nil
 			}
 			if done {
-				// t := time.Now().Format(time.RFC3339)
-				r.Log.Info().Str("courseId", a.CourseID).Str("attendance", a.AttendanceName).Msg("submitted")
-				// _ = r.WA.Send(ctx, "Attendance submitted", fmt.Sprintf("✅ %s at %s", a.AttendanceName, t))
+				t := time.Now().Format(time.RFC3339)
+				courseName := a.Course.CourseName
+				r.Log.Info().Str("at", t).Str("course", courseName).Str("att", a.AttendanceName).Msg("✅ attendance submitted")
+				messageToMe := fmt.Sprintf("✅ Presensi sukses!\n\nMata Kuliah: %s\nPresensi: %s\nJam: %s", courseName, a.AttendanceName, t)
+				messageToGroup := fmt.Sprintf("🤖 Absen Sodara ☕️\n\nMata Kuliah: %s\nPresensi: %s\nJam: %s", courseName, a.AttendanceName, t)
+
+				notify.SendWhatsAppConcurrent([]notify.GroupMessage{
+					{Message: messageToMe, GroupID: os.Getenv("WA_ME")},
+					{Message: messageToGroup, GroupID: os.Getenv("WA_GROUP")},
+				})
+				return nil
 			}
 			return nil
 		})

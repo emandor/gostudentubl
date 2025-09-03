@@ -106,7 +106,7 @@ type Attendance struct {
 	AttendanceName string
 	AttendanceLink string
 	AttendanceID   string
-	CourseID       string
+	Course         Course
 }
 
 // GetCourses parses the overview table similar to the TS version.
@@ -118,13 +118,14 @@ func (c *Client) GetCourses(ctx context.Context) ([]Course, error) {
 	return parseCourses(doc)
 }
 
-func (c *Client) GetAttendance(ctx context.Context, courseID string) ([]Attendance, error) {
+func (c *Client) GetAttendance(ctx context.Context, cr Course) ([]Attendance, error) {
+	courseID := fmt.Sprintf("%d", cr.CourseID)
 	u := fmt.Sprintf("%s?id=%s", c.Base.AttendanceListURL, courseID)
 	doc, _, err := c.get(ctx, u)
 	if err != nil {
 		return nil, err
 	}
-	return parseAttendanceList(doc, courseID), nil
+	return parseAttendanceList(doc, cr), nil
 }
 
 type FormInfo struct {

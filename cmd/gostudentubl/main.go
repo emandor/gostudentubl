@@ -5,9 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	// "time"
 
-	// "github.com/rs/zerolog"
 	"golang.org/x/time/rate"
 
 	"github.com/emandor/gostudentubl/internal/config"
@@ -37,7 +35,6 @@ func main() {
 	m.Base.AttendanceURL = cfg.AttendanceURL
 	m.Base.AttendanceFormURL = cfg.AttendanceFormURL
 
-	// wa := &notify.WAClient{Endpoint: cfg.WAEndpoint, Token: cfg.WAToken, Target: cfg.WATarget, HC: hc}
 	r := &runner.Runner{
 		Log:            log,
 		CurrentPeriode: cfg.CurrentPeriode,

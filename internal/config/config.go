@@ -20,7 +20,8 @@ type Config struct {
 
 	WAEndpoint string `env:"WA_ENDPOINT,required"`
 	WAToken    string `env:"WA_TOKEN,required"`
-	WATarget   string `env:"WA_TARGET,required"`
+	WAMe       string `env:"WA_ME"`
+	WaGroup    string `env:"WA_GROUP"`
 
 	CronWeekday string `env:"CRON_WEEKDAY"`
 	CronWeekend string `env:"CRON_WEEKEND"`
