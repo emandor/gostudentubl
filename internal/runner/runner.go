@@ -97,8 +97,9 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 				t := time.Now().Format(time.RFC3339)
 				courseName := a.Course.CourseName
 				r.Log.Info().Str("at", t).Str("course", courseName).Str("att", a.AttendanceName).Msg("✅ attendance submitted")
-				messageToMe := fmt.Sprintf("✅ Presensi sukses!\n\nMata Kuliah: %s\nPresensi: %s\nJam: %s", courseName, a.AttendanceName, t)
-				messageToGroup := fmt.Sprintf("🤖 Absen Sodara ☕️\n\nMata Kuliah: %s\nPresensi: %s\nJam: %s", courseName, a.AttendanceName, t)
+				// need send notification with link
+				messageToMe := fmt.Sprintf("✅ Presensi sukses!\n\nMata Kuliah: %s\nPresensi: %s\nJam: %s\nLink: %s", courseName, a.AttendanceName, t, a.AttendanceLink)
+				messageToGroup := fmt.Sprintf("🤖 Absen Sodara ☕️\n\nMata Kuliah: %s\nPresensi: %s\nJam: %s\nLink: %s", courseName, a.AttendanceName, t, a.AttendanceLink)
 
 				notify.SendWhatsAppConcurrent([]notify.GroupMessage{
 					{Message: messageToMe, GroupID: os.Getenv("WA_ME")},
