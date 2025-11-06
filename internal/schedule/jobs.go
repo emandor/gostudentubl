@@ -2,7 +2,6 @@ package schedule
 
 import (
 	"context"
-	"math/rand"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -27,8 +26,8 @@ func (j *Jobs) Add(spec string, r JobRunner) error {
 	_, err := j.Cron.AddFunc(spec, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		// small jitter to avoid looking botty
-		time.Sleep(time.Duration(rand.Intn(4000)) * time.Millisecond)
+		// TODO: fix small jitter to avoid looking botty
+		// time.Sleep(time.Duration(rand.Intn(4000)) * time.Millisecond)
 		_ = r.RunAttendance(ctx)
 	})
 	return err
