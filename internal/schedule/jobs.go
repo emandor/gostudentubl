@@ -24,11 +24,14 @@ func New(tz string, logger zerolog.Logger) *Jobs {
 
 func (j *Jobs) Add(spec string, r JobRunner) error {
 	_, err := j.Cron.AddFunc(spec, func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-		// TODO: fix small jitter to avoid looking botty
-		// time.Sleep(time.Duration(rand.Intn(4000)) * time.Millisecond)
-		_ = r.RunAttendance(ctx)
+		timeNow := time.Now().In(j.Cron.Location())
+		j.Log.Info().Str("time", timeNow.Format(time.RFC3339)).Msg("starting scheduled attendance run")
+		ctx := context.Background()
+		if err := r.RunAttendance(ctx); err != nil {
+			j.Log.Error().Err(err).Str("time", timeNow.Format(time.RFC3339)).Msg("scheduled attendance run failed")
+		} else {
+			j.Log.Info().Str("time", timeNow.Format(time.RFC3339)).Msg("scheduled attendance run completed successfully")
+		}
 	})
 	return err
 }
