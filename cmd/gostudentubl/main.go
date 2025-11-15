@@ -45,8 +45,17 @@ func main() {
 	}
 
 	jobs := schedule.New(cfg.Timezone, log)
-	_ = jobs.Add(cfg.CronWeekday, r)
-	_ = jobs.Add(cfg.CronWeekend, r)
+
+	errWeekDay := jobs.Add(cfg.CronWeekday, r)
+	if errWeekDay != nil {
+		log.Fatal().Err(errWeekDay).Msg("adding weekday job")
+	}
+
+	errWeekEnd := jobs.Add(cfg.CronWeekend, r)
+	if errWeekEnd != nil {
+		log.Fatal().Err(errWeekEnd).Msg("adding weekend job")
+	}
+
 	jobs.Start()
 	log.Info().Str("tz", cfg.Timezone).Msg("🤖 live! beep beep...")
 
