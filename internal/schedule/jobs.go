@@ -28,7 +28,17 @@ func (j *Jobs) Add(spec string, r JobRunner) error {
 		defer cancel()
 		// TODO: fix small jitter to avoid looking botty
 		// time.Sleep(time.Duration(rand.Intn(4000)) * time.Millisecond)
-		_ = r.RunAttendance(ctx)
+		log := j.Log.With().Str("job", "attendance").Logger()
+		timeNow := time.Now().In(j.Cron.Location())
+		log = log.With().Str("time", timeNow.Format(time.RFC3339)).Logger()
+		log.Info().Msg("🚀 starting attendance job")
+		if err := r.RunAttendance(ctx); err != nil {
+			failedTime := time.Now().In(j.Cron.Location())
+			log = log.With().Str("failed_time", failedTime.Format(time.RFC3339)).Logger()
+
+			log.Error().Err(err).Msg("attendance job failed")
+			return
+		}
 	})
 	return err
 }
