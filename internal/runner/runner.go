@@ -3,7 +3,6 @@ package runner
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
+	"github.com/emandor/gostudentubl/internal/config"
 	"github.com/emandor/gostudentubl/internal/moodle"
 	"github.com/emandor/gostudentubl/internal/notify"
 )
@@ -25,7 +25,12 @@ type Runner struct {
 }
 
 func (r *Runner) RunAttendance(ctx context.Context) error {
-	if err := r.M.Login(ctx /* env */, os.Getenv("USERNAME"), os.Getenv("PASSWORD")); err != nil {
+	cfg, err := config.Load()
+	username := cfg.Username
+	password := cfg.Password
+	waMe := cfg.WAMe
+	waGroup := cfg.WaGroup
+	if err := r.M.Login(ctx /* env */, username, password); err != nil {
 		return fmt.Errorf("login: %w", err)
 	}
 	courses, err := r.M.GetCourses(ctx)
@@ -102,8 +107,8 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 				messageToGroup := fmt.Sprintf("🤖 Absen Sodara ☕️\n\nMata Kuliah: %s\nPresensi: %s\nJam: %s\nLink: %s", courseName, a.AttendanceName, t, a.AttendanceLink)
 
 				notify.SendWhatsAppConcurrent([]notify.GroupMessage{
-					{Message: messageToMe, GroupID: os.Getenv("WA_ME")},
-					{Message: messageToGroup, GroupID: os.Getenv("WA_GROUP")},
+					{Message: messageToMe, GroupID: waMe},
+					{Message: messageToGroup, GroupID: waGroup},
 				})
 				return nil
 			}

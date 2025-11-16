@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 	"sync"
+
+	"github.com/emandor/gostudentubl/internal/config"
 )
 
 type GroupMessage struct {
@@ -22,6 +23,12 @@ type WhatsAppPayload struct {
 func SendWhatsAppConcurrent(msgs []GroupMessage) {
 	var wg sync.WaitGroup
 	client := &http.Client{}
+	cfg, err := config.Load()
+
+	if err != nil {
+		log.Printf("[WA] config load error: %v", err)
+		return
+	}
 
 	for _, m := range msgs {
 		wg.Add(1)
@@ -34,8 +41,10 @@ func SendWhatsAppConcurrent(msgs []GroupMessage) {
 			}
 
 			data, _ := json.Marshal(payload)
-			req, _ := http.NewRequest("POST", os.Getenv("WA_ENDPOINT"), bytes.NewBuffer(data))
-			req.Header.Set("Authorization", os.Getenv("WA_TOKEN"))
+			waEndpoint := cfg.WAEndpoint
+			waToken := cfg.WAToken
+			req, _ := http.NewRequest("POST", waEndpoint, bytes.NewBuffer(data))
+			req.Header.Set("Authorization", waToken)
 			req.Header.Set("Content-Type", "application/json")
 
 			resp, err := client.Do(req)
