@@ -9,10 +9,12 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/rs/zerolog"
 )
 
 type Client struct {
 	HC   *http.Client
+	Log  zerolog.Logger
 	Base struct {
 		LoginURL          string
 		CoursesURL        string
@@ -59,36 +61,78 @@ func (c *Client) postForm(ctx context.Context, u string, data url.Values) (*goqu
 }
 
 func (c *Client) Login(ctx context.Context, username, password string) error {
-	// 1) fetch login page for logintoken
+	log := c.Log
+	log.Info().Msg("🔐 starting login process")
+
+	// 1️⃣ fetch login page
 	doc, _, err := c.get(ctx, c.Base.LoginURL)
 	if err != nil {
 		return err
 	}
+
+	// 1.5️⃣ detect existing session → logout first
+	if doc.Find(`form[action*="logout.php"]`).Length() > 0 {
+		log.Info().Msg("⚠️  already logged in, performing logout first")
+		sesskey, _ := doc.Find(`input[name="sesskey"]`).Attr("value")
+		form := url.Values{
+			"sesskey":   {sesskey},
+			"loginpage": {"1"},
+		}
+		_, resp, err := c.postForm(ctx, "https://elearning.budiluhur.ac.id/login/logout.php", form)
+		if err != nil {
+			log.Error().Err(err).Msg("logout request failed")
+			return err
+		}
+		log.Info().Int("status", resp.StatusCode).Msg("✅ logout success, refetching login page")
+		// re-fetch login page after logout
+		doc, _, err = c.get(ctx, c.Base.LoginURL)
+		if err != nil {
+			return fmt.Errorf("failed to refetch login page after logout: %w", err)
+		}
+	}
+
+	// 2️⃣ extract login token
 	logintoken, exists := doc.Find(`input[name="logintoken"]`).Attr("value")
 	if !exists || logintoken == "" {
+		html, _ := doc.Html()
+		log.Warn().Msg("⚠️ missing login token, login page snippet:")
+		if len(html) > 300 {
+			log.Debug().Str("html_snippet", html[:300]).Msg("partial login page content")
+		}
 		return errors.New("missing login token")
 	}
-	// 2) submit login form; cookies/redirect handled by client+jar
+	log.Info().Str("token", logintoken).Msg("✅ login token extracted")
+
+	// 3️⃣ submit login form
 	form := url.Values{
 		"username":   {username},
 		"password":   {password},
 		"logintoken": {logintoken},
 	}
+	log.Info().Msg("🚀 submitting login form")
 	_, resp, err := c.postForm(ctx, c.Base.LoginURL, form)
 	if err != nil {
+		log.Error().Err(err).Msg("login request failed")
 		return err
 	}
+	log.Info().Int("status", resp.StatusCode).Msg("login response received")
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return fmt.Errorf("login http status %d", resp.StatusCode)
 	}
-	// 3) sanity check: courses page must not contain login form
+
+	// 4️⃣ sanity check — verify no login form in courses page
 	courses, _, err := c.get(ctx, c.Base.CoursesURL)
 	if err != nil {
+		log.Error().Err(err).Msg("failed to fetch courses page after login")
 		return err
 	}
 	if courses.Find(`#username`).Length() > 0 {
+		log.Warn().Msg("⚠️ login still showing username field, likely failed")
 		return errors.New("login failed: username field still present")
 	}
+
+	log.Info().Msg("✅ login successful and verified")
 	return nil
 }
 
