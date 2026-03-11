@@ -110,3 +110,37 @@ Additional safety setting:
 
 - `MAX_COURSES_PER_RUN`: hard cap to prevent accidental over-selection.
   - `0` disables the cap (default behavior).
+
+## Quiz & Assignment Tracking
+
+The system automatically detects and tracks quizzes and assignments across all matched period courses:
+
+- **List page parsing**: Extracts due dates, submission status, and grades from Moodle list pages.
+- **Detail page fetching**: Fetches individual assignment/quiz detail pages for richer data (submission files, grading status, attempts).
+- **New item notifications**: Sends WhatsApp notifications when new items are detected, including due date, status, and grade info.
+
+### Deadline Reminders
+
+Automatic WhatsApp reminders for approaching deadlines:
+
+- **24h reminder**: Sent when an unsubmitted item is ≤24 hours before due.
+- **12h reminder**: Sent when an unsubmitted item is ≤12 hours before due.
+- Reminders are sent only once per window (dedup via flags).
+- Submitted items are automatically excluded.
+
+### AI Suggestion System
+
+Optional LLM-powered suggestions via OpenRouter API:
+
+- Sends quiz/assignment content to an AI model for study tips and preparation guidance.
+- Results are sent via WhatsApp to your personal chat only.
+- Disabled by default (`SUGGESTION_ENABLED=false`).
+
+| Variable | Default | Description |
+|---|---|---|
+| `DETAIL_FETCH_ENABLED` | `true` | Enable detail page fetching |
+| `DETAIL_FETCH_LIMIT` | `10` | Max detail pages fetched per run |
+| `OPENROUTER_ENDPOINT` | `https://openrouter.ai/api/v1/chat/completions` | OpenRouter API endpoint |
+| `OPENROUTER_API_KEY` | — | Your OpenRouter API key |
+| `OPENROUTER_MODEL` | `anthropic/claude-sonnet-4-20250514` | LLM model to use |
+| `SUGGESTION_ENABLED` | `false` | Enable AI suggestions |

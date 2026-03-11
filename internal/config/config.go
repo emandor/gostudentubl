@@ -42,6 +42,14 @@ type Config struct {
 	MaxCoursesPerRun  int     `env:"MAX_COURSES_PER_RUN"`
 	RequestTimeoutSec int     `env:"REQUEST_TIMEOUT_SEC"`
 	DryRun            bool    `env:"DRY_RUN"`
+
+	DetailFetchEnabled bool `env:"DETAIL_FETCH_ENABLED"`
+	DetailFetchLimit   int  `env:"DETAIL_FETCH_LIMIT"`
+
+	OpenRouterEndpoint string `env:"OPENROUTER_ENDPOINT"`
+	OpenRouterAPIKey   string `env:"OPENROUTER_API_KEY"`
+	OpenRouterModel    string `env:"OPENROUTER_MODEL"`
+	SuggestionEnabled  bool   `env:"SUGGESTION_ENABLED"`
 }
 
 func Load() (Config, error) {
@@ -58,6 +66,11 @@ func Load() (Config, error) {
 		NotificationBatchLimit:    100,
 		NotificationRetentionDays: 30,
 		RequestTimeoutSec:         15,
+		DetailFetchEnabled:        true,
+		DetailFetchLimit:          10,
+		OpenRouterEndpoint:        "https://openrouter.ai/api/v1/chat/completions",
+		OpenRouterModel:           "anthropic/claude-sonnet-4-20250514",
+		SuggestionEnabled:         false,
 	}
 	if err := env.Parse(&cfg); err != nil {
 		return cfg, err

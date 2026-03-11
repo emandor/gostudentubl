@@ -15,6 +15,24 @@ import (
 	"github.com/emandor/gostudentubl/internal/notify"
 )
 
+type LLMClient interface {
+	GetSuggestion(ctx context.Context, req SuggestionRequest) (SuggestionResponse, error)
+}
+
+type SuggestionRequest struct {
+	EventType  string
+	CourseName string
+	ItemName   string
+	ItemTitle  string
+	Content    string
+}
+
+type SuggestionResponse struct {
+	Suggestion string
+	Model      string
+	TokensUsed int
+}
+
 type Runner struct {
 	Log              zerolog.Logger
 	M                *moodle.Client
@@ -34,6 +52,11 @@ type Runner struct {
 	NotificationStore         *notify.NotificationStore
 	NotificationBatchLimit    int
 	NotificationRetentionDays int
+
+	DetailFetchEnabled bool
+	DetailFetchLimit   int
+	SuggestionEnabled  bool
+	LLMClient          LLMClient
 }
 
 func (r *Runner) RunAttendance(ctx context.Context) error {
@@ -98,6 +121,27 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 
 	if err := r.fetchAssignmentsAndQuizzes(ctx, filteredCourses); err != nil {
 		r.Log.Warn().Err(err).Msg("assignment/quiz notification pipeline")
+	}
+
+	// Phase 2: detail page fetching
+	if r.DetailFetchEnabled && r.NotificationStore != nil {
+		if err := r.fetchItemDetails(ctx); err != nil {
+			r.Log.Warn().Err(err).Msg("detail page fetch pipeline")
+		}
+	}
+
+	// Phase 3: deadline reminders
+	if r.NotificationStore != nil {
+		if err := r.checkDeadlineReminders(ctx, now); err != nil {
+			r.Log.Warn().Err(err).Msg("deadline reminder pipeline")
+		}
+	}
+
+	// Phase 4: LLM suggestions
+	if r.SuggestionEnabled && r.LLMClient != nil && r.NotificationStore != nil {
+		if err := r.processSuggestions(ctx); err != nil {
+			r.Log.Warn().Err(err).Msg("suggestion pipeline")
+		}
 	}
 
 	var all []moodle.Attendance
@@ -181,14 +225,25 @@ func (r *Runner) fetchAssignmentsAndQuizzes(ctx context.Context, courses []moodl
 		}
 		totalAssignments += len(assignments)
 		for _, a := range assignments {
+			dueDateRaw := a.DueDate
+			dueDateParsed := ""
+			if dueDateRaw != "" {
+				if t, err := moodle.ParseMoodleDate(dueDateRaw); err == nil {
+					dueDateParsed = t.UTC().Format(time.RFC3339)
+				}
+			}
 			events = append(events, notify.NotificationEvent{
-				EventType:  notify.NotificationTypeAssignment,
-				CourseID:   c.CourseID,
-				CourseName: c.CourseName,
-				ItemTitle:  a.Title,
-				ItemName:   a.AssignmentName,
-				ItemLink:   a.AssignmentLink,
-				ItemID:     a.AssignmentID,
+				EventType:        notify.NotificationTypeAssignment,
+				CourseID:         c.CourseID,
+				CourseName:       c.CourseName,
+				ItemTitle:        a.Title,
+				ItemName:         a.AssignmentName,
+				ItemLink:         a.AssignmentLink,
+				ItemID:           a.AssignmentID,
+				DueDate:          dueDateRaw,
+				SubmissionStatus: a.SubmissionStatus,
+				Grade:            a.Grade,
+				DueDateParsed:    dueDateParsed,
 			})
 			r.Log.Info().
 				Str("course", a.Course.CourseName).
@@ -206,14 +261,25 @@ func (r *Runner) fetchAssignmentsAndQuizzes(ctx context.Context, courses []moodl
 		}
 		totalQuizzes += len(quizzes)
 		for _, q := range quizzes {
+			closeDateRaw := q.CloseDate
+			dueDateParsed := ""
+			if closeDateRaw != "" {
+				if t, err := moodle.ParseMoodleDate(closeDateRaw); err == nil {
+					dueDateParsed = t.UTC().Format(time.RFC3339)
+				}
+			}
 			events = append(events, notify.NotificationEvent{
-				EventType:  notify.NotificationTypeQuiz,
-				CourseID:   c.CourseID,
-				CourseName: c.CourseName,
-				ItemTitle:  q.Title,
-				ItemName:   q.QuizName,
-				ItemLink:   q.QuizLink,
-				ItemID:     q.QuizID,
+				EventType:        notify.NotificationTypeQuiz,
+				CourseID:         c.CourseID,
+				CourseName:       c.CourseName,
+				ItemTitle:        q.Title,
+				ItemName:         q.QuizName,
+				ItemLink:         q.QuizLink,
+				ItemID:           q.QuizID,
+				DueDate:          closeDateRaw,
+				SubmissionStatus: "",
+				Grade:            q.Grade,
+				DueDateParsed:    dueDateParsed,
 			})
 			r.Log.Info().
 				Str("course", q.Course.CourseName).
@@ -302,14 +368,24 @@ func buildNotificationMessage(item notify.PendingNotification) string {
 	if title == "" {
 		title = "-"
 	}
-	return fmt.Sprintf(
-		"📚 %s baru terdeteksi!\n\nMata Kuliah: %s\nTopik: %s\nItem: %s\nLink: %s",
+	msg := fmt.Sprintf(
+		"📚 %s baru terdeteksi!\n\nMata Kuliah: %s\nTopik: %s\nItem: %s",
 		label,
 		item.CourseName,
 		title,
 		item.ItemName,
-		item.ItemLink,
 	)
+	if item.DueDate != "" {
+		msg += fmt.Sprintf("\nDue: %s", item.DueDate)
+	}
+	if item.SubmissionStatus != "" {
+		msg += fmt.Sprintf("\nStatus: %s", item.SubmissionStatus)
+	}
+	if item.Grade != "" && item.Grade != "-" {
+		msg += fmt.Sprintf("\nGrade: %s", item.Grade)
+	}
+	msg += fmt.Sprintf("\nLink: %s", item.ItemLink)
+	return msg
 }
 
 func notificationLabel(eventType string) string {

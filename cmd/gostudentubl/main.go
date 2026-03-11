@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/emandor/gostudentubl/internal/config"
 	"github.com/emandor/gostudentubl/internal/httpx"
+	"github.com/emandor/gostudentubl/internal/llm"
 	"github.com/emandor/gostudentubl/internal/moodle"
 	"github.com/emandor/gostudentubl/internal/notify"
 	"github.com/emandor/gostudentubl/internal/runner"
@@ -44,6 +46,9 @@ func main() {
 	}
 	m.Base.AttendanceURL = cfg.AttendanceURL
 	m.Base.AttendanceFormURL = cfg.AttendanceFormURL
+	// Derive detail page URLs from list URLs
+	m.Base.AssignmentDetailURL = strings.Replace(m.Base.AssignmentListURL, "/index.php", "/view.php", 1)
+	m.Base.QuizDetailURL = strings.Replace(m.Base.QuizListURL, "/index.php", "/view.php", 1)
 
 	store, err := notify.NewNotificationStore(cfg.NotificationDBPath)
 	if err != nil {
@@ -74,6 +79,22 @@ func main() {
 		NotificationStore:         store,
 		NotificationBatchLimit:    cfg.NotificationBatchLimit,
 		NotificationRetentionDays: cfg.NotificationRetentionDays,
+
+		DetailFetchEnabled: cfg.DetailFetchEnabled,
+		DetailFetchLimit:   cfg.DetailFetchLimit,
+		SuggestionEnabled:  cfg.SuggestionEnabled,
+	}
+
+	// Initialize LLM client if suggestions enabled
+	if cfg.SuggestionEnabled && cfg.OpenRouterAPIKey != "" {
+		llmClient := &llm.Client{
+			Endpoint: cfg.OpenRouterEndpoint,
+			APIKey:   cfg.OpenRouterAPIKey,
+			Model:    cfg.OpenRouterModel,
+			HC:       &http.Client{Timeout: cfg.RequestTimeout()},
+		}
+		r.LLMClient = llmClient
+		log.Info().Str("model", cfg.OpenRouterModel).Msg("LLM suggestion system enabled")
 	}
 
 	jobs := schedule.New(cfg.Timezone, log)
