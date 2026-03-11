@@ -16,11 +16,15 @@ type Client struct {
 	HC   *http.Client
 	Log  zerolog.Logger
 	Base struct {
-		LoginURL          string
-		CoursesURL        string
-		AttendanceListURL string
-		AttendanceURL     string
-		AttendanceFormURL string
+		LoginURL             string
+		CoursesURL           string
+		AttendanceListURL    string
+		AssignmentListURL    string
+		QuizListURL          string
+		AttendanceURL        string
+		AttendanceFormURL    string
+		AssignmentDetailURL  string
+		QuizDetailURL        string
 	}
 	UA string
 }
@@ -153,6 +157,47 @@ type Attendance struct {
 	Course         Course
 }
 
+type Assignment struct {
+	Title            string
+	AssignmentName   string
+	AssignmentLink   string
+	AssignmentID     string
+	DueDate          string // raw text from HTML, e.g. "Saturday, 28 February 2026, 11:59 PM"
+	SubmissionStatus string // "Submitted for grading" / "No submission" / ""
+	Grade            string // "-" / "85" / ""
+	Course           Course
+}
+
+type Quiz struct {
+	Title     string
+	QuizName  string
+	QuizLink  string
+	QuizID    string
+	CloseDate string // raw text, e.g. "Monday, 30 March 2026, 11:59 PM"
+	Grade     string // "100.00/100.00" / ""
+	Course    Course
+}
+
+type AssignmentDetail struct {
+	SubmissionStatus string   // "Submitted for grading" / "No submission"
+	GradingStatus    string   // "Not graded" / "Graded"
+	DueDate          string
+	TimeRemaining    string
+	LastModified     string
+	FileSubmissions  []string // file names
+	HasEditButton    bool
+}
+
+type QuizDetail struct {
+	AttemptsAllowed string // "1" / "Unlimited"
+	CloseDate       string
+	AttemptState    string // "Finished" / ""
+	AttemptGrade    string // "100.00" / ""
+	AttemptDate     string
+	CanAttempt      bool // true if "Attempt quiz now" button exists
+	NoMoreAttempts  bool // true if "No more attempts" text exists
+}
+
 // GetCourses parses the overview table similar to the TS version.
 func (c *Client) GetCourses(ctx context.Context) ([]Course, error) {
 	doc, _, err := c.get(ctx, c.Base.CoursesURL)
@@ -170,6 +215,32 @@ func (c *Client) GetAttendance(ctx context.Context, cr Course) ([]Attendance, er
 		return nil, err
 	}
 	return parseAttendanceList(doc, cr), nil
+}
+
+func (c *Client) GetAssignments(ctx context.Context, cr Course) ([]Assignment, error) {
+	if c.Base.AssignmentListURL == "" {
+		return nil, errors.New("assignment list url is empty")
+	}
+	courseID := fmt.Sprintf("%d", cr.CourseID)
+	u := fmt.Sprintf("%s?id=%s", c.Base.AssignmentListURL, courseID)
+	doc, _, err := c.get(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return parseAssignmentList(doc, cr), nil
+}
+
+func (c *Client) GetQuizzes(ctx context.Context, cr Course) ([]Quiz, error) {
+	if c.Base.QuizListURL == "" {
+		return nil, errors.New("quiz list url is empty")
+	}
+	courseID := fmt.Sprintf("%d", cr.CourseID)
+	u := fmt.Sprintf("%s?id=%s", c.Base.QuizListURL, courseID)
+	doc, _, err := c.get(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return parseQuizList(doc, cr), nil
 }
 
 type FormInfo struct {
@@ -212,4 +283,28 @@ func (c *Client) CheckSubmitted(ctx context.Context, attendanceID string) (bool,
 		return false, err
 	}
 	return doc.Find("td:contains('Self-recorded')").Length() > 0, nil
+}
+
+func (c *Client) GetAssignmentDetail(ctx context.Context, assignmentID string) (AssignmentDetail, error) {
+	u := fmt.Sprintf("%s?id=%s", c.Base.AssignmentDetailURL, assignmentID)
+	if c.Base.AssignmentDetailURL == "" {
+		return AssignmentDetail{}, errors.New("assignment detail url is empty")
+	}
+	doc, _, err := c.get(ctx, u)
+	if err != nil {
+		return AssignmentDetail{}, err
+	}
+	return parseAssignmentDetail(doc), nil
+}
+
+func (c *Client) GetQuizDetail(ctx context.Context, quizID string) (QuizDetail, error) {
+	u := fmt.Sprintf("%s?id=%s", c.Base.QuizDetailURL, quizID)
+	if c.Base.QuizDetailURL == "" {
+		return QuizDetail{}, errors.New("quiz detail url is empty")
+	}
+	doc, _, err := c.get(ctx, u)
+	if err != nil {
+		return QuizDetail{}, err
+	}
+	return parseQuizDetail(doc), nil
 }
