@@ -19,6 +19,8 @@ type Client struct {
 		LoginURL          string
 		CoursesURL        string
 		AttendanceListURL string
+		AssignmentListURL string
+		QuizListURL       string
 		AttendanceURL     string
 		AttendanceFormURL string
 	}
@@ -153,6 +155,22 @@ type Attendance struct {
 	Course         Course
 }
 
+type Assignment struct {
+	Title          string
+	AssignmentName string
+	AssignmentLink string
+	AssignmentID   string
+	Course         Course
+}
+
+type Quiz struct {
+	Title    string
+	QuizName string
+	QuizLink string
+	QuizID   string
+	Course   Course
+}
+
 // GetCourses parses the overview table similar to the TS version.
 func (c *Client) GetCourses(ctx context.Context) ([]Course, error) {
 	doc, _, err := c.get(ctx, c.Base.CoursesURL)
@@ -170,6 +188,32 @@ func (c *Client) GetAttendance(ctx context.Context, cr Course) ([]Attendance, er
 		return nil, err
 	}
 	return parseAttendanceList(doc, cr), nil
+}
+
+func (c *Client) GetAssignments(ctx context.Context, cr Course) ([]Assignment, error) {
+	if c.Base.AssignmentListURL == "" {
+		return nil, errors.New("assignment list url is empty")
+	}
+	courseID := fmt.Sprintf("%d", cr.CourseID)
+	u := fmt.Sprintf("%s?id=%s", c.Base.AssignmentListURL, courseID)
+	doc, _, err := c.get(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return parseAssignmentList(doc, cr), nil
+}
+
+func (c *Client) GetQuizzes(ctx context.Context, cr Course) ([]Quiz, error) {
+	if c.Base.QuizListURL == "" {
+		return nil, errors.New("quiz list url is empty")
+	}
+	courseID := fmt.Sprintf("%d", cr.CourseID)
+	u := fmt.Sprintf("%s?id=%s", c.Base.QuizListURL, courseID)
+	doc, _, err := c.get(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return parseQuizList(doc, cr), nil
 }
 
 type FormInfo struct {

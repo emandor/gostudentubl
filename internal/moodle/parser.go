@@ -82,6 +82,76 @@ func parseAttendanceList(doc *goquery.Document, cr Course) []Attendance {
 	return out
 }
 
+func parseAssignmentList(doc *goquery.Document, cr Course) []Assignment {
+	notice := strings.ToLower(strings.TrimSpace(doc.Find("#notice").Text()))
+	if strings.Contains(notice, "no assignments") {
+		return nil
+	}
+	var out []Assignment
+	doc.Find(".generaltable tbody tr").Each(func(i int, s *goquery.Selection) {
+		title := strings.TrimSpace(s.Find("td.cell.c0").Text())
+		nameEl := s.Find("td.cell.c1 a")
+		if nameEl.Length() == 0 {
+			nameEl = s.Find("td.c1 a")
+		}
+		name := strings.TrimSpace(nameEl.Text())
+		link, _ := nameEl.Attr("href")
+		if title == "" || name == "" || link == "" {
+			return
+		}
+		assignID := ""
+		if m := rexCourseID.FindStringSubmatch(link); len(m) == 2 {
+			assignID = m[1]
+		}
+		if assignID == "" {
+			return
+		}
+		out = append(out, Assignment{
+			Title:          title,
+			AssignmentName: name,
+			AssignmentLink: link,
+			AssignmentID:   assignID,
+			Course:         cr,
+		})
+	})
+	return out
+}
+
+func parseQuizList(doc *goquery.Document, cr Course) []Quiz {
+	notice := strings.ToLower(strings.TrimSpace(doc.Find("#notice").Text()))
+	if strings.Contains(notice, "no quizzes") {
+		return nil
+	}
+	var out []Quiz
+	doc.Find(".generaltable tbody tr").Each(func(i int, s *goquery.Selection) {
+		title := strings.TrimSpace(s.Find("td.cell.c0").Text())
+		nameEl := s.Find("td.cell.c1 a")
+		if nameEl.Length() == 0 {
+			nameEl = s.Find("td.c1 a")
+		}
+		name := strings.TrimSpace(nameEl.Text())
+		link, _ := nameEl.Attr("href")
+		if title == "" || name == "" || link == "" {
+			return
+		}
+		quizID := ""
+		if m := rexCourseID.FindStringSubmatch(link); len(m) == 2 {
+			quizID = m[1]
+		}
+		if quizID == "" {
+			return
+		}
+		out = append(out, Quiz{
+			Title:    title,
+			QuizName: name,
+			QuizLink: link,
+			QuizID:   quizID,
+			Course:   cr,
+		})
+	})
+	return out
+}
+
 func parseViewInfo(doc *goquery.Document) (ViewInfo, error) {
 	var vi ViewInfo
 	doc.Find("a").EachWithBreak(func(i int, s *goquery.Selection) bool {

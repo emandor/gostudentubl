@@ -4,71 +4,122 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
-	"github.com/emandor/gostudentubl/internal/config"
 	"github.com/emandor/gostudentubl/internal/moodle"
 	"github.com/emandor/gostudentubl/internal/notify"
 )
 
 type Runner struct {
-	Log            zerolog.Logger
-	M              *moodle.Client
-	Dry            bool
-	Conc           int
-	CurrentPeriode string
-	Limiter        *rate.Limiter
+	Log              zerolog.Logger
+	M                *moodle.Client
+	Dry              bool
+	Conc             int
+	Limiter          *rate.Limiter
+	Username         string
+	Password         string
+	WAMe             string
+	WAGroup          string
+	Timezone         string
+	PeriodeMode      string
+	AllowedPeriodes  string
+	CurrentPeriode   string
+	MaxCoursesPerRun int
+
+	NotificationStore         *notify.NotificationStore
+	NotificationBatchLimit    int
+	NotificationRetentionDays int
 }
 
 func (r *Runner) RunAttendance(ctx context.Context) error {
-	cfg, err := config.Load()
-	username := cfg.Username
-	password := cfg.Password
-	waMe := cfg.WAMe
-	waGroup := cfg.WaGroup
-	if err := r.M.Login(ctx /* env */, username, password); err != nil {
+	if err := r.M.Login(ctx, r.Username, r.Password); err != nil {
 		return fmt.Errorf("login: %w", err)
 	}
+
 	courses, err := r.M.GetCourses(ctx)
 
 	if err != nil {
 		return fmt.Errorf("courses: %w", err)
 	}
 
-	// Group/filter by current periode if desired (simple example keeps all)
 	sort.Slice(courses, func(i, j int) bool { return courses[i].CourseName < courses[j].CourseName })
 
-	currentPeriode := r.CurrentPeriode
-	var all []moodle.Attendance
+	now, err := nowInTimezone(r.Timezone, time.Now())
+	if err != nil {
+		return fmt.Errorf("timezone: %w", err)
+	}
+	allowedPeriodes, err := resolveAllowedPeriodes(r.PeriodeMode, r.AllowedPeriodes, r.CurrentPeriode, now)
+	if err != nil {
+		return err
+	}
+	allowedSet := make(map[string]struct{}, len(allowedPeriodes))
+	for _, p := range allowedPeriodes {
+		allowedSet[p] = struct{}{}
+	}
+
+	periodCounts := map[string]int{}
+	filteredCourses := make([]moodle.Course, 0, len(courses))
 	for _, c := range courses {
-		// log some info about the course
+		p := normalizePeriode(c.Periode)
+		if p == "" {
+			periodCounts["<empty>"]++
+			continue
+		}
+		periodCounts[p]++
+		if isAllowedPeriode(p, allowedSet) {
+			filteredCourses = append(filteredCourses, c)
+		}
+	}
+
+	r.Log.Info().
+		Str("periode_mode", normalizePeriodeMode(r.PeriodeMode)).
+		Strs("allowed_periodes", allowedPeriodes).
+		Interface("discovered_periodes", periodCounts).
+		Int("matched_courses", len(filteredCourses)).
+		Int("total_courses", len(courses)).
+		Msg("periode filtering result")
+
+	if exceedsMaxCourses(r.MaxCoursesPerRun, len(filteredCourses)) {
+		return fmt.Errorf("matched courses exceeded MAX_COURSES_PER_RUN (%d > %d)", len(filteredCourses), r.MaxCoursesPerRun)
+	}
+
+	if len(filteredCourses) == 0 {
+		r.Log.Warn().
+			Strs("allowed_periodes", allowedPeriodes).
+			Interface("discovered_periodes", periodCounts).
+			Msg("no courses matched periode filter")
+		return nil
+	}
+
+	if err := r.fetchAssignmentsAndQuizzes(ctx, filteredCourses); err != nil {
+		r.Log.Warn().Err(err).Msg("assignment/quiz notification pipeline")
+	}
+
+	var all []moodle.Attendance
+	for _, c := range filteredCourses {
 		r.Log.Info().Str("course", c.CourseName).Msg("fetching attendance list")
 		ats, err := r.M.GetAttendance(ctx, c)
 		if err != nil {
 			r.Log.Warn().Err(err).Str("course", c.CourseName).Msg("attendance list")
 			continue
 		}
-
-		if c.Periode != currentPeriode {
-			r.Log.Info().Str("course", c.CourseName).Str("periode", c.Periode).Msg("skipping not current periode")
-			r.Log.Info().Msgf("current periode is %q", currentPeriode)
-			continue
-		}
 		for _, a := range ats {
 			all = append(all, a)
 		}
 	}
+
 	if len(all) == 0 {
 		r.Log.Info().Msg("no attendance found")
 		return nil
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(max(5, r.Conc))
+	g.SetLimit(effectiveConcurrency(r.Conc))
 	for i := range all {
 		a := all[i]
 		g.Go(func() error {
@@ -102,13 +153,12 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 				t := time.Now().Format(time.RFC3339)
 				courseName := a.Course.CourseName
 				r.Log.Info().Str("at", t).Str("course", courseName).Str("att", a.AttendanceName).Msg("✅ attendance submitted")
-				// need send notification with link
 				messageToMe := fmt.Sprintf("✅ Presensi sukses!\n\nMata Kuliah: %s\nPresensi: %s\nJam: %s\nLink: %s", courseName, a.AttendanceName, t, a.AttendanceLink)
 				messageToGroup := fmt.Sprintf("🤖 Absen Sodara ☕️\n\nMata Kuliah: %s\nPresensi: %s\nJam: %s\nLink: %s", courseName, a.AttendanceName, t, a.AttendanceLink)
 
 				notify.SendWhatsAppConcurrent([]notify.GroupMessage{
-					{Message: messageToMe, GroupID: waMe},
-					{Message: messageToGroup, GroupID: waGroup},
+					{Message: messageToMe, GroupID: r.WAMe},
+					{Message: messageToGroup, GroupID: r.WAGroup},
 				})
 				return nil
 			}
@@ -116,4 +166,173 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 		})
 	}
 	return g.Wait()
+}
+
+func (r *Runner) fetchAssignmentsAndQuizzes(ctx context.Context, courses []moodle.Course) error {
+	totalAssignments := 0
+	totalQuizzes := 0
+	events := make([]notify.NotificationEvent, 0, len(courses)*2)
+	for _, c := range courses {
+		r.Log.Info().Str("course", c.CourseName).Msg("fetching assignment list")
+		assignments, err := r.M.GetAssignments(ctx, c)
+		if err != nil {
+			r.Log.Warn().Err(err).Str("course", c.CourseName).Msg("assignment list")
+			continue
+		}
+		totalAssignments += len(assignments)
+		for _, a := range assignments {
+			events = append(events, notify.NotificationEvent{
+				EventType:  notify.NotificationTypeAssignment,
+				CourseID:   c.CourseID,
+				CourseName: c.CourseName,
+				ItemTitle:  a.Title,
+				ItemName:   a.AssignmentName,
+				ItemLink:   a.AssignmentLink,
+				ItemID:     a.AssignmentID,
+			})
+			r.Log.Info().
+				Str("course", a.Course.CourseName).
+				Str("title", a.Title).
+				Str("assignment", a.AssignmentName).
+				Str("link", a.AssignmentLink).
+				Msg("assignment found")
+		}
+
+		r.Log.Info().Str("course", c.CourseName).Msg("fetching quiz list")
+		quizzes, err := r.M.GetQuizzes(ctx, c)
+		if err != nil {
+			r.Log.Warn().Err(err).Str("course", c.CourseName).Msg("quiz list")
+			continue
+		}
+		totalQuizzes += len(quizzes)
+		for _, q := range quizzes {
+			events = append(events, notify.NotificationEvent{
+				EventType:  notify.NotificationTypeQuiz,
+				CourseID:   c.CourseID,
+				CourseName: c.CourseName,
+				ItemTitle:  q.Title,
+				ItemName:   q.QuizName,
+				ItemLink:   q.QuizLink,
+				ItemID:     q.QuizID,
+			})
+			r.Log.Info().
+				Str("course", q.Course.CourseName).
+				Str("title", q.Title).
+				Str("quiz", q.QuizName).
+				Str("link", q.QuizLink).
+				Msg("quiz found")
+		}
+	}
+	r.Log.Info().
+		Int("total_assignments", totalAssignments).
+		Int("total_quizzes", totalQuizzes).
+		Msg("assignment and quiz scan completed")
+
+	if r.NotificationStore == nil {
+		r.Log.Warn().Msg("notification store not configured; skipping assignment/quiz whatsapp dispatch")
+		return nil
+	}
+	if err := r.NotificationStore.UpsertEvents(ctx, events); err != nil {
+		return fmt.Errorf("upsert notification events: %w", err)
+	}
+
+	if r.Dry {
+		r.Log.Info().Int("queued_events", len(events)).Msg("dry-run: queued assignment/quiz events without dispatch")
+		return nil
+	}
+
+	pending, err := r.NotificationStore.ListPending(ctx, r.NotificationBatchLimit)
+	if err != nil {
+		return fmt.Errorf("list pending notification events: %w", err)
+	}
+	r.Log.Info().Int("pending_notifications", len(pending)).Msg("dispatching assignment/quiz notifications")
+
+	for _, item := range pending {
+		targets := r.notificationTargets(item)
+		if len(targets) == 0 {
+			if err := r.NotificationStore.MarkFailed(ctx, item.ID, fmt.Errorf("no whatsapp targets configured")); err != nil {
+				r.Log.Warn().Err(err).Int64("notification_id", item.ID).Msg("failed to mark notification as failed")
+			}
+			continue
+		}
+
+		if err := notify.SendWhatsAppReliable(targets); err != nil {
+			r.Log.Warn().Err(err).Int64("notification_id", item.ID).Str("type", item.EventType).Str("name", item.ItemName).Msg("notification send failed")
+			if markErr := r.NotificationStore.MarkFailed(ctx, item.ID, err); markErr != nil {
+				r.Log.Warn().Err(markErr).Int64("notification_id", item.ID).Msg("failed to update failed notification")
+			}
+			continue
+		}
+
+		if err := r.NotificationStore.MarkNotified(ctx, item.ID, time.Now()); err != nil {
+			r.Log.Warn().Err(err).Int64("notification_id", item.ID).Msg("failed to mark notification as notified")
+			continue
+		}
+		r.Log.Info().Int64("notification_id", item.ID).Str("type", item.EventType).Str("name", item.ItemName).Msg("notification sent")
+	}
+
+	if r.NotificationRetentionDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -r.NotificationRetentionDays)
+		deleted, err := r.NotificationStore.PruneNotifiedBefore(ctx, cutoff)
+		if err != nil {
+			r.Log.Warn().Err(err).Msg("failed to prune old notified records")
+		} else if deleted > 0 {
+			r.Log.Info().Int64("deleted_records", deleted).Msg("pruned old notified records")
+		}
+	}
+
+	return nil
+}
+
+func (r *Runner) notificationTargets(item notify.PendingNotification) []notify.GroupMessage {
+	message := buildNotificationMessage(item)
+	targets := make([]notify.GroupMessage, 0, 2)
+	if strings.TrimSpace(r.WAMe) != "" {
+		targets = append(targets, notify.GroupMessage{Message: message, GroupID: r.WAMe})
+	}
+	if strings.TrimSpace(r.WAGroup) != "" {
+		targets = append(targets, notify.GroupMessage{Message: "🤖 " + message, GroupID: r.WAGroup})
+	}
+	return targets
+}
+
+func buildNotificationMessage(item notify.PendingNotification) string {
+	label := notificationLabel(item.EventType)
+	title := strings.TrimSpace(item.ItemTitle)
+	if title == "" {
+		title = "-"
+	}
+	return fmt.Sprintf(
+		"📚 %s baru terdeteksi!\n\nMata Kuliah: %s\nTopik: %s\nItem: %s\nLink: %s",
+		label,
+		item.CourseName,
+		title,
+		item.ItemName,
+		item.ItemLink,
+	)
+}
+
+func notificationLabel(eventType string) string {
+	switch eventType {
+	case notify.NotificationTypeAssignment:
+		return "Assignment"
+	case notify.NotificationTypeQuiz:
+		return "Quiz"
+	default:
+		return "Update"
+	}
+}
+
+func effectiveConcurrency(conc int) int {
+	if conc < 1 {
+		return 1
+	}
+	return conc
+}
+
+func exceedsMaxCourses(maxCoursesPerRun, matchedCourses int) bool {
+	if maxCoursesPerRun <= 0 {
+		return false
+	}
+	return matchedCourses > maxCoursesPerRun
 }

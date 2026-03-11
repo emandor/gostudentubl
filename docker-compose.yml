@@ -1,0 +1,25 @@
+services:
+  attendance-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gostudentubl:latest
+    container_name: gostudentubl-agent
+    env_file:
+      - .env
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    volumes:
+      - gostudentubl-logs:/app
+    networks:
+      - default
+      - integration
+
+volumes:
+  gostudentubl-logs:
+
+networks:
+  integration:
+    external: true
+    name: ${INTEGRATION_NETWORK:-homelab_integration}
