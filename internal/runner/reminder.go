@@ -31,7 +31,7 @@ func (r *Runner) checkDeadlineReminders(ctx context.Context, now time.Time) erro
 		timeLeft := dueTime.Sub(now)
 
 		// 12h reminder (higher priority, check first)
-		if timeLeft <= 12*time.Hour && item.Reminder12hSent == 0 {
+		if timeLeft <= 12*time.Hour && !item.Reminder12hSent {
 			msg := buildReminderMessage(item, timeLeft, "12h")
 			if err := r.sendReminderNotification(msg); err != nil {
 				r.Log.Warn().Err(err).Str("item", item.ItemName).Msg("send 12h reminder failed")
@@ -45,7 +45,7 @@ func (r *Runner) checkDeadlineReminders(ctx context.Context, now time.Time) erro
 		}
 
 		// 24h reminder
-		if timeLeft <= 24*time.Hour && item.Reminder24hSent == 0 {
+		if timeLeft <= 24*time.Hour && !item.Reminder24hSent {
 			msg := buildReminderMessage(item, timeLeft, "24h")
 			if err := r.sendReminderNotification(msg); err != nil {
 				r.Log.Warn().Err(err).Str("item", item.ItemName).Msg("send 24h reminder failed")

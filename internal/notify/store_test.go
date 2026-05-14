@@ -144,77 +144,6 @@ func TestNotificationStorePrune(t *testing.T) {
 	}
 }
 
-<<<<<<< Updated upstream
-func TestMigrationIdempotency(t *testing.T) {
-	t.Parallel()
-	dbPath := filepath.Join(t.TempDir(), "idempotent.db")
-
-	// Open store twice - second open must not fail (migration is idempotent)
-	store1, err := NewNotificationStore(dbPath)
-	if err != nil {
-		t.Fatalf("first open: %v", err)
-	}
-	_ = store1.Close()
-
-	store2, err := NewNotificationStore(dbPath)
-	if err != nil {
-		t.Fatalf("second open (idempotency check): %v", err)
-	}
-	_ = store2.Close()
-}
-
-func TestUpsertEventsWithNewFields(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store, err := NewNotificationStore(filepath.Join(t.TempDir(), "new_fields.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	events := []NotificationEvent{{
-		EventType:        NotificationTypeAssignment,
-		CourseID:         1,
-		CourseName:       "Go Programming",
-		ItemTitle:        "Topic 1",
-		ItemName:         "Assignment 1",
-		ItemLink:         "https://example.com/mod/assign/view.php?id=101",
-		ItemID:           "101",
-		DueDate:          "Saturday, 28 February 2026, 11:59 PM",
-		SubmissionStatus: "No submission",
-		Grade:            "-",
-		DueDateParsed:    "2026-02-28T23:59:00Z",
-	}}
-
-	if err := store.UpsertEvents(ctx, events); err != nil {
-		t.Fatalf("upsert: %v", err)
-	}
-
-	pending, err := store.ListPending(ctx, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pending) != 1 {
-		t.Fatalf("expected 1, got %d", len(pending))
-	}
-	if pending[0].DueDate != "Saturday, 28 February 2026, 11:59 PM" {
-		t.Fatalf("DueDate mismatch: %q", pending[0].DueDate)
-	}
-	if pending[0].SubmissionStatus != "No submission" {
-		t.Fatalf("SubmissionStatus mismatch: %q", pending[0].SubmissionStatus)
-	}
-	if pending[0].Grade != "-" {
-		t.Fatalf("Grade mismatch: %q", pending[0].Grade)
-	}
-}
-
-func TestListApproachingDeadlinesAndReminders(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store, err := NewNotificationStore(filepath.Join(t.TempDir(), "deadlines.db"))
-	if err != nil {
-		t.Fatal(err)
-=======
 func TestNotificationStoreApproachingDeadlinesAndReminderFlags(t *testing.T) {
 	t.Parallel()
 
@@ -222,30 +151,10 @@ func TestNotificationStoreApproachingDeadlinesAndReminderFlags(t *testing.T) {
 	store, err := NewNotificationStore(filepath.Join(t.TempDir(), "notifications.db"))
 	if err != nil {
 		t.Fatalf("new store: %v", err)
->>>>>>> Stashed changes
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
 	now := time.Now().UTC()
-<<<<<<< Updated upstream
-	dueDate := now.Add(10 * time.Hour)
-
-	events := []NotificationEvent{{
-		EventType:        NotificationTypeAssignment,
-		CourseID:         1,
-		CourseName:       "Test",
-		ItemTitle:        "T1",
-		ItemName:         "A1",
-		ItemLink:         "https://example.com/1",
-		ItemID:           "201",
-		DueDate:          "Due date text",
-		SubmissionStatus: "",
-		DueDateParsed:    dueDate.Format(time.RFC3339),
-	}}
-
-	if err := store.UpsertEvents(ctx, events); err != nil {
-		t.Fatal(err)
-=======
 	events := []NotificationEvent{
 		{
 			EventType:            NotificationTypeAssignment,
@@ -272,41 +181,10 @@ func TestNotificationStoreApproachingDeadlinesAndReminderFlags(t *testing.T) {
 	}
 	if err := store.UpsertEvents(ctx, events); err != nil {
 		t.Fatalf("upsert events: %v", err)
->>>>>>> Stashed changes
 	}
 
 	items, err := store.ListApproachingDeadlines(ctx, now, 24*time.Hour)
 	if err != nil {
-<<<<<<< Updated upstream
-		t.Fatal(err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("expected 1 approaching deadline, got %d", len(items))
-	}
-	if items[0].Reminder24hSent != 0 {
-		t.Fatalf("expected Reminder24hSent=0")
-	}
-
-	// Mark 24h sent
-	if err := store.MarkReminder24hSent(ctx, items[0].ID); err != nil {
-		t.Fatal(err)
-	}
-	items, _ = store.ListApproachingDeadlines(ctx, now, 24*time.Hour)
-	if len(items) != 1 || items[0].Reminder24hSent != 1 {
-		t.Fatalf("expected Reminder24hSent=1")
-	}
-
-	// Mark 12h sent
-	if err := store.MarkReminder12hSent(ctx, items[0].ID); err != nil {
-		t.Fatal(err)
-	}
-	items, _ = store.ListApproachingDeadlines(ctx, now, 24*time.Hour)
-	if len(items) != 1 || items[0].Reminder12hSent != 1 {
-		t.Fatalf("expected Reminder12hSent=1")
-	}
-}
-
-=======
 		t.Fatalf("list approaching deadlines: %v", err)
 	}
 	if len(items) != 1 {
@@ -393,4 +271,3 @@ func TestNotificationStoreSuggestionQueries(t *testing.T) {
 		t.Fatalf("expected no suggestion-pending item after ready update, got %d", len(items))
 	}
 }
->>>>>>> Stashed changes

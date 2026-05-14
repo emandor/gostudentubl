@@ -41,7 +41,7 @@ func TestCheckDeadlineReminders24h(t *testing.T) {
 		ItemID:           "1",
 		DueDate:          "Saturday, 28 February 2026, 11:59 PM",
 		SubmissionStatus: "No submission",
-		DueDateParsed:    dueDate.Format(time.RFC3339),
+		DueDateParsedRFC3339:    dueDate.Format(time.RFC3339),
 	}}
 	if err := store.UpsertEvents(ctx, events); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -66,8 +66,8 @@ func TestCheckDeadlineReminders24h(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
-	if items[0].Reminder24hSent != 1 {
-		t.Fatalf("expected Reminder24hSent=1, got %d", items[0].Reminder24hSent)
+	if items[0].Reminder24hSent != true {
+		t.Fatalf("expected Reminder24hSent=1, got %v", items[0].Reminder24hSent)
 	}
 }
 
@@ -89,7 +89,7 @@ func TestCheckDeadlineReminders12h(t *testing.T) {
 		ItemID:           "2",
 		DueDate:          "Monday, 30 March 2026, 11:59 PM",
 		SubmissionStatus: "No submission",
-		DueDateParsed:    dueDate.Format(time.RFC3339),
+		DueDateParsedRFC3339:    dueDate.Format(time.RFC3339),
 	}}
 	if err := store.UpsertEvents(ctx, events); err != nil {
 		t.Fatal(err)
@@ -113,8 +113,8 @@ func TestCheckDeadlineReminders12h(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
-	if items[0].Reminder12hSent != 1 {
-		t.Fatalf("expected Reminder12hSent=1, got %d", items[0].Reminder12hSent)
+	if items[0].Reminder12hSent != true {
+		t.Fatalf("expected Reminder12hSent=1, got %v", items[0].Reminder12hSent)
 	}
 }
 
@@ -136,7 +136,7 @@ func TestNoReminderForSubmittedItems(t *testing.T) {
 		ItemID:           "3",
 		DueDate:          "Monday, 30 March 2026, 11:59 PM",
 		SubmissionStatus: "Submitted for grading",
-		DueDateParsed:    dueDate.Format(time.RFC3339),
+		DueDateParsedRFC3339:    dueDate.Format(time.RFC3339),
 	}}
 	if err := store.UpsertEvents(ctx, events); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestNoReminderResent(t *testing.T) {
 		ItemLink:      "https://example.com/assign/4",
 		ItemID:        "4",
 		DueDate:       "Monday, 30 March 2026, 11:59 PM",
-		DueDateParsed: dueDate.Format(time.RFC3339),
+		DueDateParsedRFC3339: dueDate.Format(time.RFC3339),
 	}}
 	if err := store.UpsertEvents(ctx, events); err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func TestNoReminderResent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) == 1 && items[0].Reminder24hSent != 1 {
-		t.Fatalf("expected Reminder24hSent=1, got %d", items[0].Reminder24hSent)
+	if len(items) == 1 && items[0].Reminder24hSent != true {
+		t.Fatalf("expected Reminder24hSent=1, got %v", items[0].Reminder24hSent)
 	}
 }

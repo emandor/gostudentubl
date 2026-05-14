@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/emandor/gostudentubl/internal/llm"
 	"github.com/emandor/gostudentubl/internal/notify"
 )
 
@@ -32,7 +33,7 @@ func (r *Runner) processSuggestions(ctx context.Context) error {
 				item.CourseName, item.ItemTitle, item.ItemName, item.EventType)
 		}
 
-		resp, err := r.LLMClient.GetSuggestion(ctx, SuggestionRequest{
+		resp, err := r.LLMClient.GetSuggestion(ctx, llm.SuggestionRequest{
 			EventType:  item.EventType,
 			CourseName: item.CourseName,
 			ItemName:   item.ItemName,

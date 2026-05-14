@@ -16,17 +16,6 @@ type Client struct {
 	HC   *http.Client
 	Log  zerolog.Logger
 	Base struct {
-<<<<<<< Updated upstream
-		LoginURL             string
-		CoursesURL           string
-		AttendanceListURL    string
-		AssignmentListURL    string
-		QuizListURL          string
-		AttendanceURL        string
-		AttendanceFormURL    string
-		AssignmentDetailURL  string
-		QuizDetailURL        string
-=======
 		LoginURL            string
 		CoursesURL          string
 		AttendanceListURL   string
@@ -36,7 +25,6 @@ type Client struct {
 		QuizDetailURL       string
 		AttendanceURL       string
 		AttendanceFormURL   string
->>>>>>> Stashed changes
 	}
 	UA string
 }
@@ -174,15 +162,9 @@ type Assignment struct {
 	AssignmentName   string
 	AssignmentLink   string
 	AssignmentID     string
-<<<<<<< Updated upstream
-	DueDate          string // raw text from HTML, e.g. "Saturday, 28 February 2026, 11:59 PM"
-	SubmissionStatus string // "Submitted for grading" / "No submission" / ""
-	Grade            string // "-" / "85" / ""
-=======
 	DueDate          string
 	SubmissionStatus string
 	Grade            string
->>>>>>> Stashed changes
 	Course           Course
 }
 
@@ -191,45 +173,22 @@ type Quiz struct {
 	QuizName  string
 	QuizLink  string
 	QuizID    string
-<<<<<<< Updated upstream
-	CloseDate string // raw text, e.g. "Monday, 30 March 2026, 11:59 PM"
-	Grade     string // "100.00/100.00" / ""
-=======
 	CloseDate string
 	Grade     string
->>>>>>> Stashed changes
 	Course    Course
 }
 
 type AssignmentDetail struct {
-<<<<<<< Updated upstream
-	SubmissionStatus string   // "Submitted for grading" / "No submission"
-	GradingStatus    string   // "Not graded" / "Graded"
-	DueDate          string
-	TimeRemaining    string
-	LastModified     string
-	FileSubmissions  []string // file names
-=======
 	SubmissionStatus string
 	GradingStatus    string
 	DueDate          string
 	TimeRemaining    string
 	LastModified     string
 	FileSubmissions  []string
->>>>>>> Stashed changes
 	HasEditButton    bool
 }
 
 type QuizDetail struct {
-<<<<<<< Updated upstream
-	AttemptsAllowed string // "1" / "Unlimited"
-	CloseDate       string
-	AttemptState    string // "Finished" / ""
-	AttemptGrade    string // "100.00" / ""
-	AttemptDate     string
-	CanAttempt      bool // true if "Attempt quiz now" button exists
-	NoMoreAttempts  bool // true if "No more attempts" text exists
-=======
 	AttemptsAllowed string
 	CloseDate       string
 	AttemptState    string
@@ -237,7 +196,6 @@ type QuizDetail struct {
 	AttemptDate     string
 	CanAttempt      bool
 	NoMoreAttempts  bool
->>>>>>> Stashed changes
 }
 
 // GetCourses parses the overview table similar to the TS version.
@@ -374,28 +332,4 @@ func (c *Client) CheckSubmitted(ctx context.Context, attendanceID string) (bool,
 		return false, err
 	}
 	return doc.Find("td:contains('Self-recorded')").Length() > 0, nil
-}
-
-func (c *Client) GetAssignmentDetail(ctx context.Context, assignmentID string) (AssignmentDetail, error) {
-	u := fmt.Sprintf("%s?id=%s", c.Base.AssignmentDetailURL, assignmentID)
-	if c.Base.AssignmentDetailURL == "" {
-		return AssignmentDetail{}, errors.New("assignment detail url is empty")
-	}
-	doc, _, err := c.get(ctx, u)
-	if err != nil {
-		return AssignmentDetail{}, err
-	}
-	return parseAssignmentDetail(doc), nil
-}
-
-func (c *Client) GetQuizDetail(ctx context.Context, quizID string) (QuizDetail, error) {
-	u := fmt.Sprintf("%s?id=%s", c.Base.QuizDetailURL, quizID)
-	if c.Base.QuizDetailURL == "" {
-		return QuizDetail{}, errors.New("quiz detail url is empty")
-	}
-	doc, _, err := c.get(ctx, u)
-	if err != nil {
-		return QuizDetail{}, err
-	}
-	return parseQuizDetail(doc), nil
 }

@@ -7,8 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/emandor/gostudentubl/internal/runner"
 )
 
 func TestGetSuggestionSuccess(t *testing.T) {
@@ -61,7 +59,7 @@ func TestGetSuggestionSuccess(t *testing.T) {
 		HC:       &http.Client{Timeout: 5 * time.Second},
 	}
 
-	resp, err := c.GetSuggestion(context.Background(), runner.SuggestionRequest{
+	resp, err := c.GetSuggestion(context.Background(), SuggestionRequest{
 		EventType:  "assignment",
 		CourseName: "Test Course",
 		ItemName:   "Assignment 1",
@@ -93,7 +91,7 @@ func TestGetSuggestionAPIError(t *testing.T) {
 		HC:       &http.Client{Timeout: 5 * time.Second},
 	}
 
-	_, err := c.GetSuggestion(context.Background(), runner.SuggestionRequest{
+	_, err := c.GetSuggestion(context.Background(), SuggestionRequest{
 		EventType: "quiz",
 		Content:   "content",
 	})
@@ -116,7 +114,7 @@ func TestGetSuggestionEmptyChoices(t *testing.T) {
 		HC:       &http.Client{Timeout: 5 * time.Second},
 	}
 
-	_, err := c.GetSuggestion(context.Background(), runner.SuggestionRequest{
+	_, err := c.GetSuggestion(context.Background(), SuggestionRequest{
 		EventType: "assignment",
 		Content:   "content",
 	})

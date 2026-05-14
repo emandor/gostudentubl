@@ -110,9 +110,6 @@ func parseAssignmentList(doc *goquery.Document, cr Course) []Assignment {
 		if assignID == "" {
 			return
 		}
-		dueDate := strings.TrimSpace(s.Find("td.cell.c2").Text())
-		submissionStatus := strings.TrimSpace(s.Find("td.cell.c3").Text())
-		grade := strings.TrimSpace(s.Find("td.cell.c4").Text())
 
 		out = append(out, Assignment{
 			Title:            title,
@@ -154,8 +151,6 @@ func parseQuizList(doc *goquery.Document, cr Course) []Quiz {
 		if quizID == "" {
 			return
 		}
-		closeDate := strings.TrimSpace(s.Find("td.cell.c2").Text())
-		grade := strings.TrimSpace(s.Find("td.cell.c3").Text())
 
 		out = append(out, Quiz{
 			Title:     title,
@@ -171,88 +166,68 @@ func parseQuizList(doc *goquery.Document, cr Course) []Quiz {
 }
 
 func parseAssignmentDetail(doc *goquery.Document) AssignmentDetail {
-	var detail AssignmentDetail
-
+	var ad AssignmentDetail
 	doc.Find(".submissionsummarytable tr").Each(func(i int, s *goquery.Selection) {
-		label := strings.ToLower(cleanCellText(s.Find("th").Text()))
-		value := cleanCellText(s.Find("td").Text())
+		label := strings.TrimSpace(s.Find("td.cell.c0").Text())
+		value := strings.TrimSpace(s.Find("td.cell.c1").Text())
 		switch {
-		case strings.Contains(label, "submission status"):
-			detail.SubmissionStatus = value
-		case strings.Contains(label, "grading status"):
-			detail.GradingStatus = value
-		case strings.Contains(label, "due date"):
-			detail.DueDate = value
-		case strings.Contains(label, "time remaining"):
-			detail.TimeRemaining = value
-		case strings.Contains(label, "last modified"):
-			detail.LastModified = value
-		case strings.Contains(label, "file submissions"):
-			files := make([]string, 0)
-			s.Find("td a").Each(func(_ int, file *goquery.Selection) {
-				name := cleanCellText(file.Text())
+		case strings.Contains(label, "Submission status"):
+			ad.SubmissionStatus = value
+		case strings.Contains(label, "Grading status"):
+			ad.GradingStatus = value
+		case strings.Contains(label, "Due date"):
+			ad.DueDate = value
+		case strings.Contains(label, "Time remaining"):
+			ad.TimeRemaining = value
+		case strings.Contains(label, "Last modified"):
+			ad.LastModified = value
+		case strings.Contains(label, "File submissions"):
+			s.Find("td.cell.c1 a").Each(func(j int, a *goquery.Selection) {
+				name := strings.TrimSpace(a.Text())
 				if name != "" {
-					files = append(files, name)
+					ad.FileSubmissions = append(ad.FileSubmissions, name)
 				}
 			})
-			if len(files) == 0 && value != "" {
-				files = append(files, value)
-			}
-			detail.FileSubmissions = files
 		}
 	})
-
-	detail.HasEditButton = doc.Find("input[value*='Edit submission'], button:contains('Edit submission'), a:contains('Edit submission')").Length() > 0
-	return detail
+	ad.HasEditButton = doc.Find("input[value*='Edit submission'], button:contains('Edit submission'), a:contains('Edit submission')").Length() > 0
+	return ad
 }
 
 func parseQuizDetail(doc *goquery.Document) QuizDetail {
-	var detail QuizDetail
-
-	parseQuizInfoBlock := func(block *goquery.Selection) {
-		block.Find("tr").Each(func(_ int, row *goquery.Selection) {
-			label := strings.ToLower(cleanCellText(row.Find("th").Text()))
-			value := cleanCellText(row.Find("td").Text())
-			switch {
-			case strings.Contains(label, "attempts allowed"):
-				detail.AttemptsAllowed = value
-			case strings.Contains(label, "close"):
-				detail.CloseDate = value
-			}
-		})
-
-		block.Find("p, li").Each(func(_ int, row *goquery.Selection) {
-			text := cleanCellText(row.Text())
-			lower := strings.ToLower(text)
-			if strings.HasPrefix(lower, "attempts allowed") {
-				detail.AttemptsAllowed = strings.TrimSpace(strings.TrimPrefix(text, "Attempts allowed:"))
-			}
-			if strings.HasPrefix(lower, "close") {
-				detail.CloseDate = strings.TrimSpace(strings.TrimPrefix(text, "Close date:"))
-			}
-		})
-	}
-
-	parseQuizInfoBlock(doc.Find(".quizinfo"))
-
-	doc.Find(".quizattemptsummary tr").Each(func(_ int, row *goquery.Selection) {
-		label := strings.ToLower(cleanCellText(row.Find("th").Text()))
-		value := cleanCellText(row.Find("td").Text())
+	var qd QuizDetail
+	doc.Find(".quizinfo p, .quizinfo li").Each(func(i int, s *goquery.Selection) {
+		text := strings.TrimSpace(s.Text())
 		switch {
-		case strings.Contains(label, "state"):
-			detail.AttemptState = value
-		case strings.Contains(label, "grade"):
-			detail.AttemptGrade = value
-		case strings.Contains(label, "time") || strings.Contains(label, "submitted"):
-			detail.AttemptDate = value
+		case strings.Contains(text, "Attempts allowed"):
+			parts := strings.SplitN(text, ":", 2)
+			if len(parts) == 2 {
+				qd.AttemptsAllowed = strings.TrimSpace(parts[1])
+			}
+		case strings.Contains(text, "close"):
+			parts := strings.SplitN(text, ":", 2)
+			if len(parts) == 2 {
+				qd.CloseDate = strings.TrimSpace(parts[1])
+			}
 		}
 	})
-
-	wholeText := strings.ToLower(cleanCellText(doc.Text()))
-	detail.CanAttempt = doc.Find("a:contains('Attempt quiz now'), button:contains('Attempt quiz now')").Length() > 0
-	detail.NoMoreAttempts = strings.Contains(wholeText, "no more attempts")
-
-	return detail
+	doc.Find(".quizattemptsummary tbody tr").Each(func(i int, s *goquery.Selection) {
+		state := strings.TrimSpace(s.Find("td.cell.c1").Text())
+		if state != "" {
+			qd.AttemptState = state
+		}
+		grade := strings.TrimSpace(s.Find("td.cell.c2").Text())
+		if grade != "" {
+			qd.AttemptGrade = grade
+		}
+		date := strings.TrimSpace(s.Find("td.cell.c3").Text())
+		if date != "" {
+			qd.AttemptDate = date
+		}
+	})
+	qd.CanAttempt = doc.Find("input[value='Attempt quiz now'], input[value='Attempt quiz'], a:contains('Attempt quiz now'), button:contains('Attempt quiz')").Length() > 0
+	qd.NoMoreAttempts = strings.Contains(doc.Text(), "No more attempts") || strings.Contains(doc.Text(), "no more attempts")
+	return qd
 }
 
 func ParseMoodleDate(raw string) (time.Time, error) {
@@ -308,92 +283,7 @@ func firstMatch(s, pattern string) string {
 	return ""
 }
 
-<<<<<<< Updated upstream
-// parseMoodleDate parses "Saturday, 28 February 2026, 11:59 PM" → time.Time
-// Moodle format uses Go reference: "Monday, 2 January 2006, 3:04 PM"
-func ParseMoodleDate(raw string) (time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return time.Time{}, fmt.Errorf("empty date string")
-	}
-	// Moodle date format
-	const layout = "Monday, 2 January 2006, 3:04 PM"
-	t, err := time.Parse(layout, raw)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse moodle date %q: %w", raw, err)
-	}
-	return t, nil
-}
-
-func parseAssignmentDetail(doc *goquery.Document) AssignmentDetail {
-	var ad AssignmentDetail
-	doc.Find(".submissionsummarytable tr").Each(func(i int, s *goquery.Selection) {
-		label := strings.TrimSpace(s.Find("td.cell.c0").Text())
-		value := strings.TrimSpace(s.Find("td.cell.c1").Text())
-		switch {
-		case strings.Contains(label, "Submission status"):
-			ad.SubmissionStatus = value
-		case strings.Contains(label, "Grading status"):
-			ad.GradingStatus = value
-		case strings.Contains(label, "Due date"):
-			ad.DueDate = value
-		case strings.Contains(label, "Time remaining"):
-			ad.TimeRemaining = value
-		case strings.Contains(label, "Last modified"):
-			ad.LastModified = value
-		case strings.Contains(label, "File submissions"):
-			s.Find("td.cell.c1 a").Each(func(j int, a *goquery.Selection) {
-				name := strings.TrimSpace(a.Text())
-				if name != "" {
-					ad.FileSubmissions = append(ad.FileSubmissions, name)
-				}
-			})
-		}
-	})
-	ad.HasEditButton = doc.Find("input[value='Edit submission'], a:contains('Edit submission')").Length() > 0
-	if ad.FileSubmissions == nil {
-		ad.FileSubmissions = []string{}
-	}
-	return ad
-}
-
-func parseQuizDetail(doc *goquery.Document) QuizDetail {
-	var qd QuizDetail
-	// Parse quiz info box
-	doc.Find(".quizinfo p, .quizinfo li").Each(func(i int, s *goquery.Selection) {
-		text := strings.TrimSpace(s.Text())
-		switch {
-		case strings.Contains(text, "Attempts allowed"):
-			qd.AttemptsAllowed = strings.TrimSpace(strings.SplitN(text, ":", 2)[1])
-		case strings.Contains(text, "close"):
-			parts := strings.SplitN(text, ":", 2)
-			if len(parts) == 2 {
-				qd.CloseDate = strings.TrimSpace(parts[1])
-			}
-		}
-	})
-	// Parse attempts summary table
-	doc.Find(".quizattemptsummary tbody tr").Each(func(i int, s *goquery.Selection) {
-		state := strings.TrimSpace(s.Find("td.cell.c1").Text())
-		if state != "" {
-			qd.AttemptState = state
-		}
-		grade := strings.TrimSpace(s.Find("td.cell.c2").Text())
-		if grade != "" {
-			qd.AttemptGrade = grade
-		}
-		date := strings.TrimSpace(s.Find("td.cell.c3").Text())
-		if date != "" {
-			qd.AttemptDate = date
-		}
-	})
-	// Check buttons/messages
-	qd.CanAttempt = doc.Find("input[value='Attempt quiz now'], input[value='Attempt quiz'], a:contains('Attempt quiz now'), button:contains('Attempt quiz')").Length() > 0
-	qd.NoMoreAttempts = strings.Contains(doc.Text(), "No more attempts") || strings.Contains(doc.Text(), "no more attempts")
-	return qd
-=======
 func cleanCellText(s string) string {
 	s = strings.ReplaceAll(s, "\u00a0", " ")
 	return strings.TrimSpace(s)
->>>>>>> Stashed changes
 }
