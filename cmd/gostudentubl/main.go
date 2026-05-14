@@ -44,11 +44,26 @@ func main() {
 	if m.Base.QuizListURL == "" {
 		m.Base.QuizListURL = strings.Replace(cfg.AttendanceListURL, "/mod/attendance/", "/mod/quiz/", 1)
 	}
+	m.Base.AssignmentDetailURL = cfg.AssignmentDetailURL
+	m.Base.QuizDetailURL = cfg.QuizDetailURL
+	if m.Base.AssignmentDetailURL == "" {
+		m.Base.AssignmentDetailURL = strings.Replace(m.Base.AssignmentListURL, "/mod/assign/index.php", "/mod/assign/view.php", 1)
+	}
+	if m.Base.QuizDetailURL == "" {
+		m.Base.QuizDetailURL = strings.Replace(m.Base.QuizListURL, "/mod/quiz/index.php", "/mod/quiz/view.php", 1)
+	}
 	m.Base.AttendanceURL = cfg.AttendanceURL
 	m.Base.AttendanceFormURL = cfg.AttendanceFormURL
 	// Derive detail page URLs from list URLs
 	m.Base.AssignmentDetailURL = strings.Replace(m.Base.AssignmentListURL, "/index.php", "/view.php", 1)
 	m.Base.QuizDetailURL = strings.Replace(m.Base.QuizListURL, "/index.php", "/view.php", 1)
+
+	llmClient := &llm.Client{
+		Endpoint: cfg.OpenRouterEndpoint,
+		APIKey:   cfg.OpenRouterAPIKey,
+		Model:    cfg.OpenRouterModel,
+		HC:       hc,
+	}
 
 	store, err := notify.NewNotificationStore(cfg.NotificationDBPath)
 	if err != nil {
@@ -79,6 +94,7 @@ func main() {
 		NotificationStore:         store,
 		NotificationBatchLimit:    cfg.NotificationBatchLimit,
 		NotificationRetentionDays: cfg.NotificationRetentionDays,
+<<<<<<< Updated upstream
 
 		DetailFetchEnabled: cfg.DetailFetchEnabled,
 		DetailFetchLimit:   cfg.DetailFetchLimit,
@@ -95,6 +111,13 @@ func main() {
 		}
 		r.LLMClient = llmClient
 		log.Info().Str("model", cfg.OpenRouterModel).Msg("LLM suggestion system enabled")
+=======
+		DetailFetchEnabled:        cfg.DetailFetchEnabled,
+		DetailFetchLimit:          cfg.DetailFetchLimit,
+		SuggestionEnabled:         cfg.SuggestionEnabled,
+		SuggestionLimit:           cfg.SuggestionLimit,
+		LLM:                       llmClient,
+>>>>>>> Stashed changes
 	}
 
 	jobs := schedule.New(cfg.Timezone, log)

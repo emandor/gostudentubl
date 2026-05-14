@@ -16,6 +16,7 @@ type Client struct {
 	HC   *http.Client
 	Log  zerolog.Logger
 	Base struct {
+<<<<<<< Updated upstream
 		LoginURL             string
 		CoursesURL           string
 		AttendanceListURL    string
@@ -25,6 +26,17 @@ type Client struct {
 		AttendanceFormURL    string
 		AssignmentDetailURL  string
 		QuizDetailURL        string
+=======
+		LoginURL            string
+		CoursesURL          string
+		AttendanceListURL   string
+		AssignmentListURL   string
+		QuizListURL         string
+		AssignmentDetailURL string
+		QuizDetailURL       string
+		AttendanceURL       string
+		AttendanceFormURL   string
+>>>>>>> Stashed changes
 	}
 	UA string
 }
@@ -162,9 +174,15 @@ type Assignment struct {
 	AssignmentName   string
 	AssignmentLink   string
 	AssignmentID     string
+<<<<<<< Updated upstream
 	DueDate          string // raw text from HTML, e.g. "Saturday, 28 February 2026, 11:59 PM"
 	SubmissionStatus string // "Submitted for grading" / "No submission" / ""
 	Grade            string // "-" / "85" / ""
+=======
+	DueDate          string
+	SubmissionStatus string
+	Grade            string
+>>>>>>> Stashed changes
 	Course           Course
 }
 
@@ -173,22 +191,37 @@ type Quiz struct {
 	QuizName  string
 	QuizLink  string
 	QuizID    string
+<<<<<<< Updated upstream
 	CloseDate string // raw text, e.g. "Monday, 30 March 2026, 11:59 PM"
 	Grade     string // "100.00/100.00" / ""
+=======
+	CloseDate string
+	Grade     string
+>>>>>>> Stashed changes
 	Course    Course
 }
 
 type AssignmentDetail struct {
+<<<<<<< Updated upstream
 	SubmissionStatus string   // "Submitted for grading" / "No submission"
 	GradingStatus    string   // "Not graded" / "Graded"
 	DueDate          string
 	TimeRemaining    string
 	LastModified     string
 	FileSubmissions  []string // file names
+=======
+	SubmissionStatus string
+	GradingStatus    string
+	DueDate          string
+	TimeRemaining    string
+	LastModified     string
+	FileSubmissions  []string
+>>>>>>> Stashed changes
 	HasEditButton    bool
 }
 
 type QuizDetail struct {
+<<<<<<< Updated upstream
 	AttemptsAllowed string // "1" / "Unlimited"
 	CloseDate       string
 	AttemptState    string // "Finished" / ""
@@ -196,6 +229,15 @@ type QuizDetail struct {
 	AttemptDate     string
 	CanAttempt      bool // true if "Attempt quiz now" button exists
 	NoMoreAttempts  bool // true if "No more attempts" text exists
+=======
+	AttemptsAllowed string
+	CloseDate       string
+	AttemptState    string
+	AttemptGrade    string
+	AttemptDate     string
+	CanAttempt      bool
+	NoMoreAttempts  bool
+>>>>>>> Stashed changes
 }
 
 // GetCourses parses the overview table similar to the TS version.
@@ -241,6 +283,55 @@ func (c *Client) GetQuizzes(ctx context.Context, cr Course) ([]Quiz, error) {
 		return nil, err
 	}
 	return parseQuizList(doc, cr), nil
+}
+
+func (c *Client) GetAssignmentDetail(ctx context.Context, assignmentID string) (AssignmentDetail, error) {
+	u, err := buildDetailURL(c.Base.AssignmentDetailURL, c.Base.AssignmentListURL, assignmentID, "/mod/assign/index.php", "/mod/assign/view.php")
+	if err != nil {
+		return AssignmentDetail{}, err
+	}
+	doc, _, err := c.get(ctx, u)
+	if err != nil {
+		return AssignmentDetail{}, err
+	}
+	return parseAssignmentDetail(doc), nil
+}
+
+func (c *Client) GetQuizDetail(ctx context.Context, quizID string) (QuizDetail, error) {
+	u, err := buildDetailURL(c.Base.QuizDetailURL, c.Base.QuizListURL, quizID, "/mod/quiz/index.php", "/mod/quiz/view.php")
+	if err != nil {
+		return QuizDetail{}, err
+	}
+	doc, _, err := c.get(ctx, u)
+	if err != nil {
+		return QuizDetail{}, err
+	}
+	return parseQuizDetail(doc), nil
+}
+
+func buildDetailURL(explicitURL, listURL, itemID, listPath, viewPath string) (string, error) {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return "", errors.New("item id is required")
+	}
+	baseURL := strings.TrimSpace(explicitURL)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(listURL)
+		if baseURL != "" {
+			baseURL = strings.Replace(baseURL, listPath, viewPath, 1)
+		}
+	}
+	if baseURL == "" {
+		return "", errors.New("detail url base is empty")
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parse detail url: %w", err)
+	}
+	q := parsed.Query()
+	q.Set("id", itemID)
+	parsed.RawQuery = q.Encode()
+	return parsed.String(), nil
 }
 
 type FormInfo struct {

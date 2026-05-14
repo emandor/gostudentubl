@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
+	"github.com/emandor/gostudentubl/internal/llm"
 	"github.com/emandor/gostudentubl/internal/moodle"
 	"github.com/emandor/gostudentubl/internal/notify"
 )
@@ -52,11 +53,21 @@ type Runner struct {
 	NotificationStore         *notify.NotificationStore
 	NotificationBatchLimit    int
 	NotificationRetentionDays int
+<<<<<<< Updated upstream
 
 	DetailFetchEnabled bool
 	DetailFetchLimit   int
 	SuggestionEnabled  bool
 	LLMClient          LLMClient
+=======
+	DetailFetchEnabled        bool
+	DetailFetchLimit          int
+	SuggestionEnabled         bool
+	SuggestionLimit           int
+	LLM                       *llm.Client
+
+	sendWhatsApp func([]notify.GroupMessage) error
+>>>>>>> Stashed changes
 }
 
 func (r *Runner) RunAttendance(ctx context.Context) error {
@@ -121,6 +132,14 @@ func (r *Runner) RunAttendance(ctx context.Context) error {
 
 	if err := r.fetchAssignmentsAndQuizzes(ctx, filteredCourses); err != nil {
 		r.Log.Warn().Err(err).Msg("assignment/quiz notification pipeline")
+	}
+	if !r.Dry {
+		if err := r.checkDeadlineReminders(ctx, time.Now()); err != nil {
+			r.Log.Warn().Err(err).Msg("deadline reminder pipeline")
+		}
+		if err := r.processSuggestions(ctx); err != nil {
+			r.Log.Warn().Err(err).Msg("suggestion pipeline")
+		}
 	}
 
 	// Phase 2: detail page fetching
@@ -225,6 +244,7 @@ func (r *Runner) fetchAssignmentsAndQuizzes(ctx context.Context, courses []moodl
 		}
 		totalAssignments += len(assignments)
 		for _, a := range assignments {
+<<<<<<< Updated upstream
 			dueDateRaw := a.DueDate
 			dueDateParsed := ""
 			if dueDateRaw != "" {
@@ -244,11 +264,29 @@ func (r *Runner) fetchAssignmentsAndQuizzes(ctx context.Context, courses []moodl
 				SubmissionStatus: a.SubmissionStatus,
 				Grade:            a.Grade,
 				DueDateParsed:    dueDateParsed,
+=======
+			dueDateParsed := parseDueDateRFC3339(a.DueDate)
+			events = append(events, notify.NotificationEvent{
+				EventType:            notify.NotificationTypeAssignment,
+				CourseID:             c.CourseID,
+				CourseName:           c.CourseName,
+				ItemTitle:            a.Title,
+				ItemName:             a.AssignmentName,
+				ItemLink:             a.AssignmentLink,
+				ItemID:               a.AssignmentID,
+				DueDate:              a.DueDate,
+				SubmissionStatus:     a.SubmissionStatus,
+				Grade:                a.Grade,
+				DueDateParsedRFC3339: dueDateParsed,
+>>>>>>> Stashed changes
 			})
 			r.Log.Info().
 				Str("course", a.Course.CourseName).
 				Str("title", a.Title).
 				Str("assignment", a.AssignmentName).
+				Str("due_date", a.DueDate).
+				Str("submission_status", a.SubmissionStatus).
+				Str("grade", a.Grade).
 				Str("link", a.AssignmentLink).
 				Msg("assignment found")
 		}
@@ -261,6 +299,7 @@ func (r *Runner) fetchAssignmentsAndQuizzes(ctx context.Context, courses []moodl
 		}
 		totalQuizzes += len(quizzes)
 		for _, q := range quizzes {
+<<<<<<< Updated upstream
 			closeDateRaw := q.CloseDate
 			dueDateParsed := ""
 			if closeDateRaw != "" {
@@ -280,11 +319,27 @@ func (r *Runner) fetchAssignmentsAndQuizzes(ctx context.Context, courses []moodl
 				SubmissionStatus: "",
 				Grade:            q.Grade,
 				DueDateParsed:    dueDateParsed,
+=======
+			dueDateParsed := parseDueDateRFC3339(q.CloseDate)
+			events = append(events, notify.NotificationEvent{
+				EventType:            notify.NotificationTypeQuiz,
+				CourseID:             c.CourseID,
+				CourseName:           c.CourseName,
+				ItemTitle:            q.Title,
+				ItemName:             q.QuizName,
+				ItemLink:             q.QuizLink,
+				ItemID:               q.QuizID,
+				DueDate:              q.CloseDate,
+				Grade:                q.Grade,
+				DueDateParsedRFC3339: dueDateParsed,
+>>>>>>> Stashed changes
 			})
 			r.Log.Info().
 				Str("course", q.Course.CourseName).
 				Str("title", q.Title).
 				Str("quiz", q.QuizName).
+				Str("close_date", q.CloseDate).
+				Str("grade", q.Grade).
 				Str("link", q.QuizLink).
 				Msg("quiz found")
 		}
@@ -300,6 +355,11 @@ func (r *Runner) fetchAssignmentsAndQuizzes(ctx context.Context, courses []moodl
 	}
 	if err := r.NotificationStore.UpsertEvents(ctx, events); err != nil {
 		return fmt.Errorf("upsert notification events: %w", err)
+	}
+	if !r.Dry && r.DetailFetchEnabled {
+		if err := r.fetchDetailsForPendingItems(ctx); err != nil {
+			r.Log.Warn().Err(err).Msg("detail fetch pipeline")
+		}
 	}
 
 	if r.Dry {
@@ -322,7 +382,7 @@ func (r *Runner) fetchAssignmentsAndQuizzes(ctx context.Context, courses []moodl
 			continue
 		}
 
-		if err := notify.SendWhatsAppReliable(targets); err != nil {
+		if err := r.sendReliable(targets); err != nil {
 			r.Log.Warn().Err(err).Int64("notification_id", item.ID).Str("type", item.EventType).Str("name", item.ItemName).Msg("notification send failed")
 			if markErr := r.NotificationStore.MarkFailed(ctx, item.ID, err); markErr != nil {
 				r.Log.Warn().Err(markErr).Int64("notification_id", item.ID).Msg("failed to update failed notification")
@@ -352,6 +412,10 @@ func (r *Runner) fetchAssignmentsAndQuizzes(ctx context.Context, courses []moodl
 
 func (r *Runner) notificationTargets(item notify.PendingNotification) []notify.GroupMessage {
 	message := buildNotificationMessage(item)
+	return r.messageTargets(message)
+}
+
+func (r *Runner) messageTargets(message string) []notify.GroupMessage {
 	targets := make([]notify.GroupMessage, 0, 2)
 	if strings.TrimSpace(r.WAMe) != "" {
 		targets = append(targets, notify.GroupMessage{Message: message, GroupID: r.WAMe})
@@ -362,18 +426,49 @@ func (r *Runner) notificationTargets(item notify.PendingNotification) []notify.G
 	return targets
 }
 
+func (r *Runner) sendReliable(msgs []notify.GroupMessage) error {
+	if r.sendWhatsApp != nil {
+		return r.sendWhatsApp(msgs)
+	}
+	return notify.SendWhatsAppReliable(msgs)
+}
+
 func buildNotificationMessage(item notify.PendingNotification) string {
 	label := notificationLabel(item.EventType)
 	title := strings.TrimSpace(item.ItemTitle)
 	if title == "" {
 		title = "-"
 	}
+<<<<<<< Updated upstream
 	msg := fmt.Sprintf(
 		"📚 %s baru terdeteksi!\n\nMata Kuliah: %s\nTopik: %s\nItem: %s",
+=======
+	dueDate := strings.TrimSpace(item.DueDate)
+	if dueDate == "" {
+		dueDate = "-"
+	}
+	status := strings.TrimSpace(item.SubmissionStatus)
+	if status == "" {
+		status = "-"
+	}
+	grade := strings.TrimSpace(item.Grade)
+	if grade == "" {
+		grade = "-"
+	}
+	return fmt.Sprintf(
+		"📚 %s baru terdeteksi!\n\nMata Kuliah: %s\nTopik: %s\nItem: %s\nDue: %s\nStatus: %s\nGrade: %s\nLink: %s",
+>>>>>>> Stashed changes
 		label,
 		item.CourseName,
 		title,
 		item.ItemName,
+<<<<<<< Updated upstream
+=======
+		dueDate,
+		status,
+		grade,
+		item.ItemLink,
+>>>>>>> Stashed changes
 	)
 	if item.DueDate != "" {
 		msg += fmt.Sprintf("\nDue: %s", item.DueDate)
@@ -411,4 +506,12 @@ func exceedsMaxCourses(maxCoursesPerRun, matchedCourses int) bool {
 		return false
 	}
 	return matchedCourses > maxCoursesPerRun
+}
+
+func parseDueDateRFC3339(raw string) string {
+	t, err := moodle.ParseMoodleDate(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }

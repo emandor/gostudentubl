@@ -97,6 +97,26 @@ docker compose kill -s SIGUSR1 attendance-agent
 - Keep secrets only in `.env` (already ignored by git).
 - Run a single agent instance unless you add distributed locking, otherwise duplicate attendance jobs can occur.
 
+## Quiz and Assignment Tracking
+
+The runner now tracks richer assignment/quiz metadata and sends smarter notifications:
+
+- Assignment list parsing: due date, submission status, grade.
+- Quiz list parsing: close date, grade.
+- Detail page fetch pipeline for assignments/quizzes (limited per run).
+- Deadline reminders (24h and 12h windows) for unfinished items.
+- Optional AI suggestion pipeline via OpenRouter for pending tasks.
+
+Relevant environment variables:
+
+- `DETAIL_FETCH_ENABLED` (default `true`)
+- `DETAIL_FETCH_LIMIT` (default `10`)
+- `OPENROUTER_ENDPOINT` (default `https://openrouter.ai/api/v1/chat/completions`)
+- `OPENROUTER_API_KEY` (required when `SUGGESTION_ENABLED=true`)
+- `OPENROUTER_MODEL` (default `anthropic/claude-sonnet-4-20250514`)
+- `SUGGESTION_ENABLED` (default `false`)
+- `SUGGESTION_LIMIT` (default `5`)
+
 ## Periode Mode
 
 This project supports dynamic period filtering so monthly manual config updates are optional.

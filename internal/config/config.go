@@ -12,14 +12,16 @@ type Config struct {
 	Username string `env:"USERNAME,required"`
 	Password string `env:"PASSWORD,required"`
 
-	LoginURL          string `env:"LOGIN_URL,required"`
-	CoursesURL        string `env:"COURSES_URL,required"`
-	AttendanceListURL string `env:"ATTENDANCE_LIST_URL,required"`
-	AssignmentListURL string `env:"ASSIGNMENT_LIST_URL"`
-	QuizListURL       string `env:"QUIZ_LIST_URL"`
-	AttendanceURL     string `env:"ATTENDANCE_URL,required"`
-	AttendanceFormURL string `env:"ATTENDANCE_FORM_URL,required"`
-	CurrentPeriode    string `env:"CURRENT_PERIODE"`
+	LoginURL            string `env:"LOGIN_URL,required"`
+	CoursesURL          string `env:"COURSES_URL,required"`
+	AttendanceListURL   string `env:"ATTENDANCE_LIST_URL,required"`
+	AssignmentListURL   string `env:"ASSIGNMENT_LIST_URL"`
+	QuizListURL         string `env:"QUIZ_LIST_URL"`
+	AssignmentDetailURL string `env:"ASSIGNMENT_DETAIL_URL"`
+	QuizDetailURL       string `env:"QUIZ_DETAIL_URL"`
+	AttendanceURL       string `env:"ATTENDANCE_URL,required"`
+	AttendanceFormURL   string `env:"ATTENDANCE_FORM_URL,required"`
+	CurrentPeriode      string `env:"CURRENT_PERIODE"`
 
 	PeriodeMode     string `env:"PERIODE_MODE"`
 	AllowedPeriodes string `env:"ALLOWED_PERIODES"`
@@ -32,6 +34,14 @@ type Config struct {
 	NotificationDBPath        string `env:"NOTIFICATION_DB_PATH"`
 	NotificationBatchLimit    int    `env:"NOTIFICATION_BATCH_LIMIT"`
 	NotificationRetentionDays int    `env:"NOTIFICATION_RETENTION_DAYS"`
+	DetailFetchEnabled        bool   `env:"DETAIL_FETCH_ENABLED"`
+	DetailFetchLimit          int    `env:"DETAIL_FETCH_LIMIT"`
+
+	OpenRouterEndpoint string `env:"OPENROUTER_ENDPOINT"`
+	OpenRouterAPIKey   string `env:"OPENROUTER_API_KEY"`
+	OpenRouterModel    string `env:"OPENROUTER_MODEL"`
+	SuggestionEnabled  bool   `env:"SUGGESTION_ENABLED"`
+	SuggestionLimit    int    `env:"SUGGESTION_LIMIT"`
 
 	CronWeekday string `env:"CRON_WEEKDAY"`
 	CronWeekend string `env:"CRON_WEEKEND"`
@@ -65,6 +75,12 @@ func Load() (Config, error) {
 		NotificationDBPath:        "notifications.db",
 		NotificationBatchLimit:    100,
 		NotificationRetentionDays: 30,
+		DetailFetchEnabled:        true,
+		DetailFetchLimit:          10,
+		OpenRouterEndpoint:        "https://openrouter.ai/api/v1/chat/completions",
+		OpenRouterModel:           "anthropic/claude-sonnet-4-20250514",
+		SuggestionEnabled:         false,
+		SuggestionLimit:           5,
 		RequestTimeoutSec:         15,
 		DetailFetchEnabled:        true,
 		DetailFetchLimit:          10,
