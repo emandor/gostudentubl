@@ -16,6 +16,7 @@ vendor/
 dist/
 tmp/
 *.out
+draftserver
 
 .vscode/
 .idea/

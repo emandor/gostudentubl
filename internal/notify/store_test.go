@@ -271,3 +271,109 @@ func TestNotificationStoreSuggestionQueries(t *testing.T) {
 		t.Fatalf("expected no suggestion-pending item after ready update, got %d", len(items))
 	}
 }
+
+func TestNotificationStoreRunLock(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := NewNotificationStore(filepath.Join(t.TempDir(), "notifications.db"))
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	now := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
+	ok, err := store.AcquireRunLock(ctx, "attendance", "owner-1", 10*time.Minute, now)
+	if err != nil {
+		t.Fatalf("acquire first lock: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected first lock acquisition to succeed")
+	}
+
+	ok, err = store.AcquireRunLock(ctx, "attendance", "owner-2", 10*time.Minute, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("acquire contested lock: %v", err)
+	}
+	if ok {
+		t.Fatalf("expected active lock acquisition to be rejected")
+	}
+
+	ok, err = store.AcquireRunLock(ctx, "attendance", "owner-2", 10*time.Minute, now.Add(11*time.Minute))
+	if err != nil {
+		t.Fatalf("acquire expired lock: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected expired lock acquisition to succeed")
+	}
+
+	if err := store.ReleaseRunLock(ctx, "attendance", "owner-2"); err != nil {
+		t.Fatalf("release lock: %v", err)
+	}
+}
+
+func TestNotificationStoreDailyOperationalSummary(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := NewNotificationStore(filepath.Join(t.TempDir(), "notifications.db"))
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	started := time.Date(2026, 5, 19, 8, 0, 0, 0, time.UTC)
+	runID, err := store.StartRun(ctx, RunRecord{
+		JobName:   "attendance",
+		Owner:     "test",
+		StartedAt: started,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if err := store.FinishRun(ctx, runID, RunRecord{
+		Status:              "success",
+		FinishedAt:          started.Add(time.Minute),
+		TotalCourses:        4,
+		MatchedCourses:      3,
+		AttendanceFound:     2,
+		AttendanceSubmitted: 2,
+		AssignmentsFound:    5,
+		QuizzesFound:        1,
+		NotificationsSent:   3,
+		RemindersSent:       1,
+		DraftsReady:         2,
+	}); err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+
+	failedRunID, err := store.StartRun(ctx, RunRecord{
+		JobName:   "attendance",
+		Owner:     "test",
+		StartedAt: started.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("start failed run: %v", err)
+	}
+	if err := store.FinishRun(ctx, failedRunID, RunRecord{
+		Status:     "failed",
+		FinishedAt: started.Add(time.Hour + time.Minute),
+		Error:      "login: invalid session",
+	}); err != nil {
+		t.Fatalf("finish failed run: %v", err)
+	}
+
+	summary, err := store.DailyOperationalSummary(ctx, started.Add(-time.Hour), started.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if summary.RunTotal != 2 || summary.RunSuccess != 1 || summary.RunFailed != 1 {
+		t.Fatalf("unexpected run counts: %+v", summary)
+	}
+	if summary.AttendanceSubmitted != 2 || summary.AssignmentsFound != 5 || summary.QuizzesFound != 1 {
+		t.Fatalf("unexpected activity counts: %+v", summary)
+	}
+	if summary.LastError != "login: invalid session" {
+		t.Fatalf("unexpected last error %q", summary.LastError)
+	}
+}

@@ -44,11 +44,16 @@ type Config struct {
 	SuggestionLimit    int    `env:"SUGGESTION_LIMIT"`
 
 	DraftEnabled     bool   `env:"DRAFT_ENABLED"`
-	DraftSolver      string `env:"DRAFT_SOLVER"`      // legacy, used when DraftProviders is empty
-	DraftProviders   string `env:"DRAFT_PROVIDERS"`   // comma-separated: "copilot,openrouter,codex"
-	DraftRetryMax    int    `env:"DRAFT_RETRY_MAX"`   // max attempts per provider (default 2)
+	DraftSolver      string `env:"DRAFT_SOLVER"`    // legacy, used when DraftProviders is empty
+	DraftProviders   string `env:"DRAFT_PROVIDERS"` // comma-separated: "copilot,openrouter,codex"
+	DraftRetryMax    int    `env:"DRAFT_RETRY_MAX"` // max attempts per provider (default 2)
 	DraftLimit       int    `env:"DRAFT_LIMIT"`
 	DraftTmuxSession string `env:"DRAFT_TMUX_SESSION"`
+
+	RunLockEnabled      bool   `env:"RUN_LOCK_ENABLED"`
+	RunLockTTLMinutes   int    `env:"RUN_LOCK_TTL_MINUTES"`
+	DailySummaryEnabled bool   `env:"DAILY_SUMMARY_ENABLED"`
+	CronDailySummary    string `env:"CRON_DAILY_SUMMARY"`
 
 	CronWeekday string `env:"CRON_WEEKDAY"`
 	CronWeekend string `env:"CRON_WEEKEND"`
@@ -86,6 +91,10 @@ func Load() (Config, error) {
 		DraftRetryMax:             2,
 		DraftLimit:                3,
 		DraftTmuxSession:          "copilot-solver",
+		RunLockEnabled:            true,
+		RunLockTTLMinutes:         15,
+		DailySummaryEnabled:       true,
+		CronDailySummary:          "30 21 * * *",
 		RequestTimeoutSec:         15,
 	}
 	if err := env.Parse(&cfg); err != nil {

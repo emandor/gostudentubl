@@ -12,6 +12,10 @@ type JobRunner interface {
 	RunAttendance(ctx context.Context) error
 }
 
+type SummaryRunner interface {
+	SendDailySummary(ctx context.Context) error
+}
+
 type Jobs struct {
 	Cron *cron.Cron
 	Log  zerolog.Logger
@@ -38,6 +42,19 @@ func (j *Jobs) Add(spec string, r JobRunner) error {
 
 			log.Error().Err(err).Msg("attendance job failed")
 			return
+		}
+	})
+	return err
+}
+
+func (j *Jobs) AddDailySummary(spec string, r SummaryRunner) error {
+	_, err := j.Cron.AddFunc(spec, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		log := j.Log.With().Str("job", "daily_summary").Logger()
+		log.Info().Msg("📊 starting daily summary job")
+		if err := r.SendDailySummary(ctx); err != nil {
+			log.Error().Err(err).Msg("daily summary job failed")
 		}
 	})
 	return err

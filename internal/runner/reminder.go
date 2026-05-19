@@ -10,6 +10,10 @@ import (
 )
 
 func (r *Runner) checkDeadlineReminders(ctx context.Context, now time.Time) error {
+	return r.checkDeadlineRemindersWithStats(ctx, now, nil)
+}
+
+func (r *Runner) checkDeadlineRemindersWithStats(ctx context.Context, now time.Time, stats *runStats) error {
 	// Query items approaching deadline within 24h window
 	items, err := r.NotificationStore.ListApproachingDeadlines(ctx, now, 24*time.Hour)
 	if err != nil {
@@ -40,6 +44,9 @@ func (r *Runner) checkDeadlineReminders(ctx context.Context, now time.Time) erro
 			if err := r.NotificationStore.MarkReminder12hSent(ctx, item.ID); err != nil {
 				r.Log.Warn().Err(err).Str("item", item.ItemName).Msg("mark 12h reminder sent failed")
 			}
+			if stats != nil {
+				stats.RemindersSent++
+			}
 			r.Log.Info().Str("item", item.ItemName).Dur("time_left", timeLeft).Msg("12h reminder sent")
 			continue
 		}
@@ -53,6 +60,9 @@ func (r *Runner) checkDeadlineReminders(ctx context.Context, now time.Time) erro
 			}
 			if err := r.NotificationStore.MarkReminder24hSent(ctx, item.ID); err != nil {
 				r.Log.Warn().Err(err).Str("item", item.ItemName).Msg("mark 24h reminder sent failed")
+			}
+			if stats != nil {
+				stats.RemindersSent++
 			}
 			r.Log.Info().Str("item", item.ItemName).Dur("time_left", timeLeft).Msg("24h reminder sent")
 		}

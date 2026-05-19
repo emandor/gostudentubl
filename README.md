@@ -97,6 +97,17 @@ docker compose kill -s SIGUSR1 attendance-agent
 - Keep secrets only in `.env` (already ignored by git).
 - Run a single agent instance unless you add distributed locking, otherwise duplicate attendance jobs can occur.
 
+## Operational Safety & Reporting
+
+The agent records each attendance run in SQLite and uses a short-lived run lock to avoid overlapping executions.
+
+- `RUN_LOCK_ENABLED` (default `true`): skip a run if another instance still owns the attendance lock.
+- `RUN_LOCK_TTL_MINUTES` (default `15`): lock expiry guard in case the process dies mid-run.
+- `DAILY_SUMMARY_ENABLED` (default `true`): send a daily WhatsApp summary to `WA_ME`.
+- `CRON_DAILY_SUMMARY` (default `30 21 * * *`): daily summary schedule in `TIMEZONE`.
+
+The summary includes run success/failure counts, attendance submissions, assignment/quiz scans, notifications, reminders, ready drafts, and the latest error if any.
+
 ## Quiz and Assignment Tracking
 
 The runner now tracks richer assignment/quiz metadata and sends smarter notifications:

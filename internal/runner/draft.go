@@ -10,6 +10,10 @@ import (
 )
 
 func (r *Runner) processDrafts(ctx context.Context) error {
+	return r.processDraftsWithStats(ctx, nil)
+}
+
+func (r *Runner) processDraftsWithStats(ctx context.Context, stats *runStats) error {
 	if !r.DraftEnabled {
 		return nil
 	}
@@ -41,7 +45,9 @@ func (r *Runner) processDrafts(ctx context.Context) error {
 
 		// MultiSolver path: run all providers concurrently.
 		if r.MultiSolver != nil {
-			r.processItemMulti(ctx, item, req)
+			if r.processItemMulti(ctx, item, req) && stats != nil {
+				stats.DraftsReady++
+			}
 			continue
 		}
 
@@ -58,6 +64,9 @@ func (r *Runner) processDrafts(ctx context.Context) error {
 		if err := r.NotificationStore.UpdateDraft(ctx, item.ID, "ready", resp.DraftText, resp.Provider, resp.Model); err != nil {
 			r.Log.Warn().Err(err).Str("item", item.ItemName).Msg("store draft failed")
 			continue
+		}
+		if stats != nil {
+			stats.DraftsReady++
 		}
 
 		msg := buildDraftReadyMessage(item, resp.Provider)
@@ -78,7 +87,7 @@ func (r *Runner) processDrafts(ctx context.Context) error {
 
 // processItemMulti runs all providers concurrently, stores each result, then
 // marks the item ready if at least one provider succeeded.
-func (r *Runner) processItemMulti(ctx context.Context, item notify.NotificationEvent, req solver.SolveRequest) {
+func (r *Runner) processItemMulti(ctx context.Context, item notify.NotificationEvent, req solver.SolveRequest) bool {
 	results := r.MultiSolver.SolveAll(ctx, req)
 
 	var successCount int
@@ -106,7 +115,7 @@ func (r *Runner) processItemMulti(ctx context.Context, item notify.NotificationE
 		if resetErr := r.NotificationStore.UpdateDraft(ctx, item.ID, "", "", "", ""); resetErr != nil {
 			r.Log.Warn().Err(resetErr).Msg("reset draft status failed")
 		}
-		return
+		return false
 	}
 
 	best := solver.PickBest(results)
@@ -116,7 +125,7 @@ func (r *Runner) processItemMulti(ctx context.Context, item notify.NotificationE
 
 	if err := r.NotificationStore.UpdateDraft(ctx, item.ID, "ready", best.DraftText, best.Provider, best.Model); err != nil {
 		r.Log.Warn().Err(err).Str("item", item.ItemName).Msg("store draft failed")
-		return
+		return false
 	}
 
 	providers := make([]string, 0, len(results))
@@ -129,6 +138,7 @@ func (r *Runner) processItemMulti(ctx context.Context, item notify.NotificationE
 	if err := r.sendDraftNotification(msg); err != nil {
 		r.Log.Warn().Err(err).Str("item", item.ItemName).Msg("send draft notification failed")
 	}
+	return true
 }
 
 func buildDraftReadyMessage(item notify.NotificationEvent, provider string) string {
