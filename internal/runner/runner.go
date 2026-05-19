@@ -14,6 +14,7 @@ import (
 "github.com/emandor/gostudentubl/internal/llm"
 "github.com/emandor/gostudentubl/internal/moodle"
 "github.com/emandor/gostudentubl/internal/notify"
+"github.com/emandor/gostudentubl/internal/solver"
 )
 
 type Runner struct {
@@ -40,6 +41,12 @@ DetailFetchLimit          int
 SuggestionEnabled         bool
 SuggestionLimit           int
 LLMClient                 llm.LLMClient
+DraftEnabled              bool
+DraftSolver               string
+DraftLimit                int
+DraftTmuxSession          string
+Solver                    solver.Solver
+MultiSolver               *solver.MultiSolver
 
 sendWhatsApp func([]notify.GroupMessage) error
 }
@@ -126,6 +133,13 @@ r.Log.Warn().Err(err).Msg("deadline reminder pipeline")
 if r.SuggestionEnabled && r.LLMClient != nil && r.NotificationStore != nil {
 if err := r.processSuggestions(ctx); err != nil {
 r.Log.Warn().Err(err).Msg("suggestion pipeline")
+}
+}
+
+// Phase 5: AI draft solver
+if r.DraftEnabled && (r.MultiSolver != nil || r.Solver != nil) && r.NotificationStore != nil {
+if err := r.processDrafts(ctx); err != nil {
+r.Log.Warn().Err(err).Msg("draft solver pipeline")
 }
 }
 
@@ -356,9 +370,12 @@ title := strings.TrimSpace(item.ItemTitle)
 if title == "" {
 title = "-"
 }
-dueDate := strings.TrimSpace(item.DueDate)
+dueDate := formatWIB(item.DueDateParsed)
+if dueDate == "-" {
+dueDate = strings.TrimSpace(item.DueDate)
 if dueDate == "" {
 dueDate = "-"
+}
 }
 status := strings.TrimSpace(item.SubmissionStatus)
 if status == "" {
@@ -412,4 +429,18 @@ if err != nil {
 return ""
 }
 return t.UTC().Format(time.RFC3339)
+}
+
+// formatWIB formats an RFC3339 timestamp as human-readable WIB (UTC+7).
+// Falls back to the raw string if parsing fails.
+func formatWIB(rfcStr string) string {
+if rfcStr == "" {
+return "-"
+}
+t, err := time.Parse(time.RFC3339, rfcStr)
+if err != nil {
+return rfcStr
+}
+wib := time.FixedZone("WIB", 7*3600)
+return t.In(wib).Format("02 Jan 2006, 15:04 WIB")
 }

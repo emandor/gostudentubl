@@ -7,11 +7,19 @@ services:
     container_name: gostudentubl-agent
     env_file:
       - .env
-    restart: unless-stopped
+    environment:
+      - COPILOT_CLI=1
+      - COPILOT_RUN_APP=1
+      - COPILOT_CLI_BINARY_VERSION=1.0.44
     stop_signal: SIGTERM
     stop_grace_period: 30s
     volumes:
       - gostudentubl-logs:/app
+      - /bin/gh:/usr/local/bin/gh:ro
+      - /usr/local/bin/copilot:/usr/local/bin/copilot:ro
+      - /home/docker-data/gh-config:/home/app/.config/gh:ro
+      - /home/docker-data/copilot-config:/home/app/.copilot
+      - /root/.config/gh:/root/.config/gh:ro
     networks:
       - default
       - integration

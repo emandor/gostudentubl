@@ -1,0 +1,23 @@
+services:
+  draftserver:
+    build:
+      context: ../..
+      dockerfile: deploy/draftserver/Dockerfile
+    image: gostudentubl-draftserver:latest
+    container_name: gostudentubl-draftserver
+    env_file: .env
+    volumes:
+      - gostudentubl_gostudentubl-logs:/data:ro
+    ports:
+      - "8082:8082"
+    restart: unless-stopped
+    networks:
+      - homelab_integration
+
+volumes:
+  gostudentubl_gostudentubl-logs:
+    external: true
+
+networks:
+  homelab_integration:
+    external: true

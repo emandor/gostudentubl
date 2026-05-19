@@ -20,6 +20,7 @@ CourseName string
 ItemName   string
 ItemTitle  string
 Content    string
+MaxTokens  int // optional; 0 means use model default
 }
 
 type SuggestionResponse struct {
@@ -37,8 +38,9 @@ HC       *http.Client
 }
 
 type chatRequest struct {
-Model    string        `json:"model"`
-Messages []chatMessage `json:"messages"`
+Model     string        `json:"model"`
+Messages  []chatMessage `json:"messages"`
+MaxTokens int           `json:"max_tokens,omitempty"`
 }
 
 type chatMessage struct {
@@ -83,6 +85,7 @@ Messages: []chatMessage{
 {Role: "system", Content: systemPrompt},
 {Role: "user", Content: userContent},
 },
+MaxTokens: req.MaxTokens,
 }
 
 jsonBody, err := json.Marshal(body)

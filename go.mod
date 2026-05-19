@@ -1,10 +1,11 @@
 module github.com/emandor/gostudentubl
 
-go 1.24.0
+go 1.24
 
 require (
 	github.com/PuerkitoBio/goquery v1.10.3
 	github.com/caarlos0/env/v10 v10.0.0
+	github.com/gomarkdown/markdown v0.0.0-20260417124207-7d523f7318df
 	github.com/hashicorp/go-retryablehttp v0.7.7
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rs/zerolog v1.33.0

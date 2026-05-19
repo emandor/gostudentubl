@@ -191,7 +191,27 @@ func parseAssignmentDetail(doc *goquery.Document) AssignmentDetail {
 		}
 	})
 	ad.HasEditButton = doc.Find("input[value*='Edit submission'], button:contains('Edit submission'), a:contains('Edit submission')").Length() > 0
+	// Parse assignment description — try several selectors used across Moodle versions/themes.
+	ad.Description = parseAssignmentDescription(doc)
 	return ad
+}
+
+// parseAssignmentDescription extracts the assignment's intro/description text from common Moodle HTML selectors.
+func parseAssignmentDescription(doc *goquery.Document) string {
+	selectors := []string{
+		"div.activity-description",      // Moodle 4.x Boost
+		"#intro",                        // Moodle 3.x standard
+		"div.box.generalbox.boxaligncenter",
+		"div.box.generalbox",            // older themes
+		"div[data-region='assign-intro']",
+	}
+	for _, sel := range selectors {
+		text := strings.TrimSpace(doc.Find(sel).First().Text())
+		if text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func parseQuizDetail(doc *goquery.Document) QuizDetail {

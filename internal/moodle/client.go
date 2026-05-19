@@ -186,6 +186,7 @@ type AssignmentDetail struct {
 	LastModified     string
 	FileSubmissions  []string
 	HasEditButton    bool
+	Description      string // assignment problem text scraped from page intro
 }
 
 type QuizDetail struct {

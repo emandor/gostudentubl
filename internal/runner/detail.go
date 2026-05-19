@@ -91,6 +91,9 @@ func assignmentRawContent(item notify.PendingNotification, detail moodle.Assignm
 		"Topic: " + item.ItemTitle,
 		"Item: " + item.ItemName,
 	}
+	if strings.TrimSpace(detail.Description) != "" {
+		parts = append(parts, "Description:\n"+strings.TrimSpace(detail.Description))
+	}
 	if strings.TrimSpace(detail.SubmissionStatus) != "" {
 		parts = append(parts, "Submission Status: "+detail.SubmissionStatus)
 	}

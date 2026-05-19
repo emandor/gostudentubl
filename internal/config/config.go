@@ -43,6 +43,13 @@ type Config struct {
 	SuggestionEnabled  bool   `env:"SUGGESTION_ENABLED"`
 	SuggestionLimit    int    `env:"SUGGESTION_LIMIT"`
 
+	DraftEnabled     bool   `env:"DRAFT_ENABLED"`
+	DraftSolver      string `env:"DRAFT_SOLVER"`      // legacy, used when DraftProviders is empty
+	DraftProviders   string `env:"DRAFT_PROVIDERS"`   // comma-separated: "copilot,openrouter,codex"
+	DraftRetryMax    int    `env:"DRAFT_RETRY_MAX"`   // max attempts per provider (default 2)
+	DraftLimit       int    `env:"DRAFT_LIMIT"`
+	DraftTmuxSession string `env:"DRAFT_TMUX_SESSION"`
+
 	CronWeekday string `env:"CRON_WEEKDAY"`
 	CronWeekend string `env:"CRON_WEEKEND"`
 
@@ -73,6 +80,12 @@ func Load() (Config, error) {
 		OpenRouterModel:           "anthropic/claude-sonnet-4-20250514",
 		SuggestionEnabled:         false,
 		SuggestionLimit:           5,
+		DraftEnabled:              true,
+		DraftSolver:               "openrouter-with-copilot-fallback",
+		DraftProviders:            "copilot,openrouter,codex",
+		DraftRetryMax:             2,
+		DraftLimit:                3,
+		DraftTmuxSession:          "copilot-solver",
 		RequestTimeoutSec:         15,
 	}
 	if err := env.Parse(&cfg); err != nil {

@@ -16,6 +16,7 @@ import (
 "github.com/emandor/gostudentubl/internal/notify"
 "github.com/emandor/gostudentubl/internal/runner"
 "github.com/emandor/gostudentubl/internal/schedule"
+"github.com/emandor/gostudentubl/internal/solver"
 "github.com/emandor/gostudentubl/internal/telemetry"
 )
 
@@ -64,6 +65,15 @@ Model:    cfg.OpenRouterModel,
 HC:       hc,
 }
 
+// Use multi-solver when DRAFT_PROVIDERS is set; fall back to legacy single solver.
+providers := cfg.DraftProviders
+if providers == "" {
+providers = cfg.DraftSolver // legacy mapping: treat old mode as single provider name
+}
+multiSolver := solver.NewMulti(providers, cfg.OpenRouterEndpoint, cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.DraftTmuxSession, cfg.DraftRetryMax)
+// Keep legacy single solver for backward compat only.
+draftSolver := solver.New(cfg.DraftSolver, cfg.OpenRouterEndpoint, cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.DraftTmuxSession)
+
 store, err := notify.NewNotificationStore(cfg.NotificationDBPath)
 if err != nil {
 log.Fatal().Err(err).Msg("notification store")
@@ -98,6 +108,12 @@ DetailFetchLimit:          cfg.DetailFetchLimit,
 SuggestionEnabled:         cfg.SuggestionEnabled,
 SuggestionLimit:           cfg.SuggestionLimit,
 LLMClient:                 llmClient,
+DraftEnabled:              cfg.DraftEnabled,
+DraftSolver:               cfg.DraftSolver,
+DraftLimit:                cfg.DraftLimit,
+DraftTmuxSession:          cfg.DraftTmuxSession,
+Solver:                    draftSolver,
+MultiSolver:               multiSolver,
 }
 
 jobs := schedule.New(cfg.Timezone, log)

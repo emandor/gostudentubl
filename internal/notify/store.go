@@ -20,6 +20,7 @@ NotificationTypeQuiz       = "quiz"
 )
 
 type NotificationEvent struct {
+ID                   int64  // populated when read from DB
 EventType            string
 CourseID             int
 CourseName           string
@@ -31,6 +32,12 @@ DueDate              string
 SubmissionStatus     string
 Grade                string
 DueDateParsedRFC3339 string
+RawContent           string // populated by ListNeedingDraft via JOIN
+DraftStatus          string
+DraftText            string
+DraftProvider        string
+DraftModel           string
+DraftUpdatedAt       string
 }
 
 type PendingNotification struct {
@@ -178,6 +185,25 @@ UNIQUE(event_type, item_id)
 if _, err := s.db.ExecContext(ctx, createItemDetailsTable); err != nil {
 return fmt.Errorf("migrate item_details: %w", err)
 }
+
+const createDraftResultsTable = `
+CREATE TABLE IF NOT EXISTS draft_results (
+id         INTEGER PRIMARY KEY AUTOINCREMENT,
+event_id   INTEGER NOT NULL,
+provider   TEXT    NOT NULL,
+model      TEXT    NOT NULL DEFAULT '',
+draft_text TEXT    NOT NULL DEFAULT '',
+tokens_used INTEGER NOT NULL DEFAULT 0,
+error      TEXT    NOT NULL DEFAULT '',
+attempt    INTEGER NOT NULL DEFAULT 1,
+created_at TEXT    NOT NULL,
+UNIQUE(event_id, provider)
+);
+CREATE INDEX IF NOT EXISTS idx_draft_results_event ON draft_results(event_id);
+`
+if _, err := s.db.ExecContext(ctx, createDraftResultsTable); err != nil {
+return fmt.Errorf("migrate draft_results: %w", err)
+}
 return nil
 }
 
@@ -195,6 +221,11 @@ ddl    string
 {column: "detail_fetched", ddl: "detail_fetched INTEGER NOT NULL DEFAULT 0 CHECK(detail_fetched IN (0, 1))"},
 {column: "suggestion_status", ddl: "suggestion_status TEXT NOT NULL DEFAULT ''"},
 {column: "suggestion_text", ddl: "suggestion_text TEXT NOT NULL DEFAULT ''"},
+{column: "draft_status", ddl: "draft_status TEXT NOT NULL DEFAULT ''"},
+{column: "draft_text", ddl: "draft_text TEXT NOT NULL DEFAULT ''"},
+{column: "draft_provider", ddl: "draft_provider TEXT NOT NULL DEFAULT ''"},
+{column: "draft_model", ddl: "draft_model TEXT NOT NULL DEFAULT ''"},
+{column: "draft_updated_at", ddl: "draft_updated_at TEXT"},
 }
 for _, c := range toEnsure {
 if err := s.ensureColumn(ctx, "notification_events", c.column, c.ddl); err != nil {
@@ -716,6 +747,196 @@ return 0, fmt.Errorf("prune rows affected: %w", err)
 return rows, nil
 }
 
+// ListNeedingDraft returns events that have raw_content, are not yet submitted,
+// and have draft_status in ('', 'queued').
+func (s *NotificationStore) ListNeedingDraft(ctx context.Context, limit int) ([]NotificationEvent, error) {
+if limit <= 0 {
+limit = 10
+}
+rows, err := s.db.QueryContext(ctx, `
+SELECT ne.id, ne.event_type, ne.course_id, ne.course_name, ne.item_title, ne.item_name,
+ne.item_link, ne.item_id, ne.due_date, ne.submission_status, ne.grade, ne.due_date_parsed,
+ne.draft_status, ne.draft_text, ne.draft_provider, ne.draft_model,
+COALESCE(ne.draft_updated_at, ''),
+COALESCE(idt.raw_content, '')
+FROM notification_events ne
+LEFT JOIN item_details idt ON idt.event_type = ne.event_type AND idt.item_id = ne.item_id
+WHERE ne.detail_fetched = 1
+AND (ne.draft_status = '' OR ne.draft_status = 'queued')
+AND (ne.submission_status = '' OR lower(ne.submission_status) NOT LIKE '%submitted for grading%')
+AND COALESCE(idt.raw_content, '') <> ''
+ORDER BY ne.id ASC
+LIMIT ?;
+`, limit)
+if err != nil {
+return nil, fmt.Errorf("query needing draft: %w", err)
+}
+defer rows.Close()
+
+out := make([]NotificationEvent, 0, limit)
+for rows.Next() {
+var ev NotificationEvent
+if err := rows.Scan(
+&ev.ID,
+&ev.EventType,
+&ev.CourseID,
+&ev.CourseName,
+&ev.ItemTitle,
+&ev.ItemName,
+&ev.ItemLink,
+&ev.ItemID,
+&ev.DueDate,
+&ev.SubmissionStatus,
+&ev.Grade,
+&ev.DueDateParsedRFC3339,
+&ev.DraftStatus,
+&ev.DraftText,
+&ev.DraftProvider,
+&ev.DraftModel,
+&ev.DraftUpdatedAt,
+&ev.RawContent,
+); err != nil {
+return nil, fmt.Errorf("scan needing draft: %w", err)
+}
+out = append(out, ev)
+}
+if err := rows.Err(); err != nil {
+return nil, fmt.Errorf("iterate needing draft: %w", err)
+}
+return out, nil
+}
+
+// UpdateDraft sets the draft columns on a notification event.
+func (s *NotificationStore) UpdateDraft(ctx context.Context, id int64, status, text, provider, model string) error {
+now := time.Now().UTC().Format(time.RFC3339)
+if _, err := s.db.ExecContext(ctx, `
+UPDATE notification_events
+SET draft_status = ?, draft_text = ?, draft_provider = ?, draft_model = ?,
+draft_updated_at = ?, updated_at = ?
+WHERE id = ?;
+`, status, text, provider, model, now, now, id); err != nil {
+return fmt.Errorf("update draft: %w", err)
+}
+return nil
+}
+
+// MarkDraftOpen promotes a ready draft to 'open' (publicly visible).
+func (s *NotificationStore) MarkDraftOpen(ctx context.Context, id int64) error {
+now := time.Now().UTC().Format(time.RFC3339)
+if _, err := s.db.ExecContext(ctx, `
+UPDATE notification_events
+SET draft_status = 'open', draft_updated_at = ?, updated_at = ?
+WHERE id = ? AND draft_status = 'ready';
+`, now, now, id); err != nil {
+return fmt.Errorf("mark draft open: %w", err)
+}
+return nil
+}
+
+// ListReadyDrafts returns all events with draft_status in ('ready', 'open').
+func (s *NotificationStore) ListReadyDrafts(ctx context.Context) ([]NotificationEvent, error) {
+rows, err := s.db.QueryContext(ctx, `
+SELECT ne.id, ne.event_type, ne.course_id, ne.course_name, ne.item_title, ne.item_name,
+ne.item_link, ne.item_id, ne.due_date, ne.submission_status, ne.grade, ne.due_date_parsed,
+ne.draft_status, ne.draft_text, ne.draft_provider, ne.draft_model,
+COALESCE(ne.draft_updated_at, '')
+FROM notification_events ne
+WHERE ne.draft_status IN ('ready', 'open')
+ORDER BY ne.id DESC;
+`)
+if err != nil {
+return nil, fmt.Errorf("query ready drafts: %w", err)
+}
+defer rows.Close()
+return scanDraftEvents(rows)
+}
+
+// ListOpenDrafts returns only publicly visible drafts (draft_status = 'open').
+func (s *NotificationStore) ListOpenDrafts(ctx context.Context) ([]NotificationEvent, error) {
+rows, err := s.db.QueryContext(ctx, `
+SELECT ne.id, ne.event_type, ne.course_id, ne.course_name, ne.item_title, ne.item_name,
+ne.item_link, ne.item_id, ne.due_date, ne.submission_status, ne.grade, ne.due_date_parsed,
+ne.draft_status, ne.draft_text, ne.draft_provider, ne.draft_model,
+COALESCE(ne.draft_updated_at, '')
+FROM notification_events ne
+WHERE ne.draft_status = 'open'
+ORDER BY ne.id DESC;
+`)
+if err != nil {
+return nil, fmt.Errorf("query open drafts: %w", err)
+}
+defer rows.Close()
+return scanDraftEvents(rows)
+}
+
+func scanDraftEvents(rows *sql.Rows) ([]NotificationEvent, error) {
+out := make([]NotificationEvent, 0)
+for rows.Next() {
+var ev NotificationEvent
+if err := rows.Scan(
+&ev.ID,
+&ev.EventType,
+&ev.CourseID,
+&ev.CourseName,
+&ev.ItemTitle,
+&ev.ItemName,
+&ev.ItemLink,
+&ev.ItemID,
+&ev.DueDate,
+&ev.SubmissionStatus,
+&ev.Grade,
+&ev.DueDateParsedRFC3339,
+&ev.DraftStatus,
+&ev.DraftText,
+&ev.DraftProvider,
+&ev.DraftModel,
+&ev.DraftUpdatedAt,
+); err != nil {
+return nil, fmt.Errorf("scan draft event: %w", err)
+}
+out = append(out, ev)
+}
+if err := rows.Err(); err != nil {
+return nil, fmt.Errorf("iterate draft events: %w", err)
+}
+return out, nil
+}
+
+// GetDraftByID returns a single draft event by its primary key.
+func (s *NotificationStore) GetDraftByID(ctx context.Context, id int64) (NotificationEvent, error) {
+var ev NotificationEvent
+err := s.db.QueryRowContext(ctx, `
+SELECT ne.id, ne.event_type, ne.course_id, ne.course_name, ne.item_title, ne.item_name,
+ne.item_link, ne.item_id, ne.due_date, ne.submission_status, ne.grade, ne.due_date_parsed,
+ne.draft_status, ne.draft_text, ne.draft_provider, ne.draft_model,
+COALESCE(ne.draft_updated_at, '')
+FROM notification_events ne
+WHERE ne.id = ?;
+`, id).Scan(
+&ev.ID,
+&ev.EventType,
+&ev.CourseID,
+&ev.CourseName,
+&ev.ItemTitle,
+&ev.ItemName,
+&ev.ItemLink,
+&ev.ItemID,
+&ev.DueDate,
+&ev.SubmissionStatus,
+&ev.Grade,
+&ev.DueDateParsedRFC3339,
+&ev.DraftStatus,
+&ev.DraftText,
+&ev.DraftProvider,
+&ev.DraftModel,
+&ev.DraftUpdatedAt,
+)
+if err != nil {
+return NotificationEvent{}, fmt.Errorf("get draft by id: %w", err)
+}
+return ev, nil
+}
+
 func validateEvent(ev NotificationEvent) error {
 if ev.EventType != NotificationTypeAssignment && ev.EventType != NotificationTypeQuiz {
 return fmt.Errorf("unsupported event type: %q", ev.EventType)
@@ -747,4 +968,59 @@ if v {
 return 1
 }
 return 0
+}
+
+// ── draft_results ─────────────────────────────────────────────────────────────
+
+// DraftResult holds one provider's draft attempt for a notification event.
+type DraftResult struct {
+ID         int64
+EventID    int64
+Provider   string
+Model      string
+DraftText  string
+TokensUsed int
+Error      string
+Attempt    int
+CreatedAt  string
+}
+
+// UpsertDraftResult inserts or replaces a per-provider draft result.
+func (s *NotificationStore) UpsertDraftResult(ctx context.Context, eventID int64, provider, model, draftText string, tokensUsed int, errStr string, attempt int) error {
+now := time.Now().UTC().Format(time.RFC3339)
+_, err := s.db.ExecContext(ctx, `
+INSERT INTO draft_results (event_id, provider, model, draft_text, tokens_used, error, attempt, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(event_id, provider) DO UPDATE SET
+  model       = excluded.model,
+  draft_text  = excluded.draft_text,
+  tokens_used = excluded.tokens_used,
+  error       = excluded.error,
+  attempt     = excluded.attempt,
+  created_at  = excluded.created_at;
+`, eventID, provider, model, draftText, tokensUsed, errStr, attempt, now)
+if err != nil {
+return fmt.Errorf("upsert draft result: %w", err)
+}
+return nil
+}
+
+// ListDraftResults returns all per-provider draft results for a given event.
+func (s *NotificationStore) ListDraftResults(ctx context.Context, eventID int64) ([]DraftResult, error) {
+rows, err := s.db.QueryContext(ctx, `
+SELECT id, event_id, provider, model, draft_text, tokens_used, error, attempt, created_at
+FROM draft_results WHERE event_id = ? ORDER BY provider ASC`, eventID)
+if err != nil {
+return nil, fmt.Errorf("query draft results: %w", err)
+}
+defer rows.Close()
+var out []DraftResult
+for rows.Next() {
+var r DraftResult
+if err := rows.Scan(&r.ID, &r.EventID, &r.Provider, &r.Model, &r.DraftText, &r.TokensUsed, &r.Error, &r.Attempt, &r.CreatedAt); err != nil {
+return nil, fmt.Errorf("scan draft result: %w", err)
+}
+out = append(out, r)
+}
+return out, rows.Err()
 }
