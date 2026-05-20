@@ -764,7 +764,7 @@ func loginPage(question, errMsg string) string {
 	return pageWrap("Login – Draft Portal", fmt.Sprintf(`
 <main class="login-screen">
 <section class="login-box">
-  <div class="brand-mark">IBM</div>
+  <div class="brand-mark">ARK</div>
   <p class="eyebrow">Moodle Automation Console</p>
   <h1>Draft Portal</h1>
   <p class="question">%s</p>
@@ -952,7 +952,7 @@ func appShell(active, title, kicker, body string, authenticated bool) string {
 	return fmt.Sprintf(`
 <div class="app-shell">
   <aside class="shell-sidebar">
-    <a class="shell-brand" href="%s"><span class="brand-mark">IBM</span><span>Moodle Console</span></a>
+    <a class="shell-brand" href="%s"><span class="brand-mark">ARK</span><span>Moodle Console</span></a>
     <nav class="shell-nav">%s</nav>
   </aside>
   <main class="shell-main">
@@ -1153,6 +1153,9 @@ document.addEventListener("DOMContentLoaded",function(){
 	sb.WriteString("<title>")
 	sb.WriteString(escHTML(title))
 	sb.WriteString("</title>\n")
+	sb.WriteString("<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n")
+	sb.WriteString("<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n")
+	sb.WriteString("<link href=\"https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap\" rel=\"stylesheet\">\n")
 	sb.WriteString(katexHead)
 	sb.WriteString("\n<style>")
 	sb.WriteString(css)
