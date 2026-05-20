@@ -108,6 +108,16 @@ The agent records each attendance run in SQLite and uses a short-lived run lock 
 
 The summary includes run success/failure counts, attendance submissions, assignment/quiz scans, notifications, reminders, ready drafts, and the latest error if any.
 
+## Draft Portal UI
+
+The draft portal uses a Go-rendered hybrid UI: no frontend build step, with the visual system guided by the generated IBM-inspired `DESIGN.md`.
+
+- Authenticated dashboard: `/dashboard`
+- Draft review: `/drafts`
+- Public/open drafts: `/open`
+- Run history: `/runs`
+- Audit log: `/audit`
+
 ## Quiz and Assignment Tracking
 
 The runner now tracks richer assignment/quiz metadata and sends smarter notifications:

@@ -25,14 +25,17 @@ type server struct {
 func newServer(cfg config, db *sql.DB) *server {
 	s := &server{cfg: cfg, db: db}
 	s.initAuditTable()
+	s.initOperationalTables()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleSecurityForm)
 	mux.HandleFunc("POST /auth", s.handleAuth)
+	mux.HandleFunc("GET /dashboard", s.requireAuth(s.handleDashboard))
 	mux.HandleFunc("GET /drafts", s.requireAuth(s.handleListDrafts))
 	mux.HandleFunc("GET /drafts/{id}", s.requireAuth(s.handleViewDraft))
 	mux.HandleFunc("GET /open", s.handleListOpen)
 	mux.HandleFunc("GET /open/{id}", s.handleViewOpen)
 	mux.HandleFunc("POST /admin/open/{id}", s.requireAuth(s.handleMarkOpen))
+	mux.HandleFunc("GET /runs", s.requireAuth(s.handleRuns))
 	mux.HandleFunc("GET /audit", s.requireAuth(s.handleAudit))
 	s.mux = mux
 	return s
@@ -128,6 +131,28 @@ func (s *server) initAuditTable() {
 	)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_access_logs_ts ON access_logs(ts DESC)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_access_logs_suspicious ON access_logs(suspicious) WHERE suspicious>0`)
+}
+
+func (s *server) initOperationalTables() {
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS automation_runs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		job_name TEXT NOT NULL,
+		owner TEXT NOT NULL DEFAULT '',
+		started_at TEXT NOT NULL,
+		finished_at TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL,
+		total_courses INTEGER NOT NULL DEFAULT 0,
+		matched_courses INTEGER NOT NULL DEFAULT 0,
+		attendance_found INTEGER NOT NULL DEFAULT 0,
+		attendance_submitted INTEGER NOT NULL DEFAULT 0,
+		assignments_found INTEGER NOT NULL DEFAULT 0,
+		quizzes_found INTEGER NOT NULL DEFAULT 0,
+		notifications_sent INTEGER NOT NULL DEFAULT 0,
+		reminders_sent INTEGER NOT NULL DEFAULT 0,
+		drafts_ready INTEGER NOT NULL DEFAULT 0,
+		error TEXT NOT NULL DEFAULT ''
+	)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_automation_runs_started_at ON automation_runs(started_at DESC)`)
 }
 
 // suspiciousPatterns are path substrings that indicate scanning / attack attempts.
@@ -239,9 +264,27 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
+func (s *server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	summary := s.queryDashboardSummary()
+	drafts, _ := s.queryDrafts(`
+		SELECT ne.id, ne.event_type, ne.course_name, ne.item_title, ne.item_name,
+		       ne.item_link, ne.due_date,
+		       ne.draft_status, ne.draft_text, ne.draft_provider, ne.draft_model,
+		       COALESCE(ne.draft_updated_at,''), COALESCE(ne.due_date_parsed,''),
+		       '',
+		       COALESCE((SELECT GROUP_CONCAT(provider,',') FROM draft_results WHERE event_id=ne.id AND draft_text!='' ORDER BY provider),'')
+		FROM notification_events ne
+		WHERE ne.draft_status IN ('ready','open')
+		ORDER BY ne.id DESC
+		LIMIT 6`)
+	runs, _ := s.queryRuns(6)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, dashboardPage(summary, drafts, runs))
+}
+
 func (s *server) handleSecurityForm(w http.ResponseWriter, r *http.Request) {
 	if s.isAuthenticated(r) {
-		http.Redirect(w, r, "/drafts", http.StatusFound)
+		http.Redirect(w, r, "/dashboard", http.StatusFound)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -284,7 +327,7 @@ func (s *server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, "/drafts", http.StatusFound)
+	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
 func (s *server) handleListDrafts(w http.ResponseWriter, r *http.Request) {
@@ -374,6 +417,16 @@ func (s *server) handleMarkOpen(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/drafts", http.StatusFound)
 }
 
+func (s *server) handleRuns(w http.ResponseWriter, r *http.Request) {
+	runs, err := s.queryRuns(100)
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, runsPage(runs))
+}
+
 // ─── DB helpers ──────────────────────────────────────────────────────────────
 
 // formatWIB formats an RFC3339 timestamp as human-readable WIB (UTC+7).
@@ -416,6 +469,79 @@ type draftRow struct {
 	RawContent     string
 	ProvidersList  string        // comma-separated successful providers from draft_results
 	Results        []draftResult // per-provider results (only loaded for detail page)
+}
+
+type dashboardSummary struct {
+	ReadyDrafts          int
+	OpenDrafts           int
+	PendingNotifications int
+	RecentRuns           int
+	FailedRuns           int
+	SuspiciousTotal      int
+	RequestsToday        int
+	LastError            string
+}
+
+type runRow struct {
+	ID                  int64
+	JobName             string
+	Owner               string
+	StartedAt           string
+	FinishedAt          string
+	Status              string
+	TotalCourses        int
+	MatchedCourses      int
+	AttendanceFound     int
+	AttendanceSubmitted int
+	AssignmentsFound    int
+	QuizzesFound        int
+	NotificationsSent   int
+	RemindersSent       int
+	DraftsReady         int
+	Error               string
+}
+
+func (s *server) queryDashboardSummary() dashboardSummary {
+	var d dashboardSummary
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM notification_events WHERE draft_status = 'ready'`).Scan(&d.ReadyDrafts)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM notification_events WHERE draft_status = 'open'`).Scan(&d.OpenDrafts)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM notification_events WHERE notified = 0`).Scan(&d.PendingNotifications)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM automation_runs WHERE started_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-24 hours')`).Scan(&d.RecentRuns)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM automation_runs WHERE status = 'failed' AND started_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-7 days')`).Scan(&d.FailedRuns)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM access_logs WHERE suspicious > 0`).Scan(&d.SuspiciousTotal)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM access_logs WHERE ts >= date('now')`).Scan(&d.RequestsToday)
+	_ = s.db.QueryRow(`SELECT error FROM automation_runs WHERE error <> '' ORDER BY id DESC LIMIT 1`).Scan(&d.LastError)
+	return d
+}
+
+func (s *server) queryRuns(limit int) ([]runRow, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`
+		SELECT id, job_name, owner, started_at, finished_at, status,
+		       total_courses, matched_courses, attendance_found, attendance_submitted,
+		       assignments_found, quizzes_found, notifications_sent, reminders_sent,
+		       drafts_ready, error
+		FROM automation_runs
+		ORDER BY id DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []runRow
+	for rows.Next() {
+		var r runRow
+		if err := rows.Scan(&r.ID, &r.JobName, &r.Owner, &r.StartedAt, &r.FinishedAt, &r.Status,
+			&r.TotalCourses, &r.MatchedCourses, &r.AttendanceFound, &r.AttendanceSubmitted,
+			&r.AssignmentsFound, &r.QuizzesFound, &r.NotificationsSent, &r.RemindersSent,
+			&r.DraftsReady, &r.Error); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func (s *server) queryDrafts(query string, args ...any) ([]draftRow, error) {
@@ -492,18 +618,18 @@ func auditPage(entries []auditLogEntry, ips []auditTopIP, totalToday, suspCount 
 	var sb strings.Builder
 
 	// Summary bar
-	sb.WriteString(`<div class="audit-summary">`)
-	fmt.Fprintf(&sb, `<div class="audit-stat"><span class="audit-stat-n">%d</span><span class="audit-stat-l">reqs today</span></div>`, totalToday)
-	fmt.Fprintf(&sb, `<div class="audit-stat audit-suspicious"><span class="audit-stat-n">%d</span><span class="audit-stat-l">suspicious total</span></div>`, suspCount)
+	sb.WriteString(`<div class="metric-grid">`)
+	sb.WriteString(metricCard("Requests today", strconv.Itoa(totalToday), "HTTP requests recorded today", ""))
+	sb.WriteString(metricCard("Suspicious", strconv.Itoa(suspCount), "Total suspicious requests", "danger"))
 	sb.WriteString(`</div>`)
 
 	// Top IPs
 	if len(ips) > 0 {
-		sb.WriteString(`<div class="audit-topips"><strong>Top IPs:</strong>`)
+		sb.WriteString(`<section class="panel"><h2>Top IPs</h2><div class="chip-row">`)
 		for _, ip := range ips {
-			fmt.Fprintf(&sb, `<span class="audit-ip-badge">%s <b>×%d</b></span>`, escHTML(ip.IP), ip.Count)
+			fmt.Fprintf(&sb, `<span class="chip">%s <b>×%d</b></span>`, escHTML(ip.IP), ip.Count)
 		}
-		sb.WriteString(`</div>`)
+		sb.WriteString(`</div></section>`)
 	}
 
 	// Filter buttons
@@ -515,7 +641,7 @@ func auditPage(entries []auditLogEntry, ips []auditTopIP, totalToday, suspCount 
 		allActive = " active"
 	}
 	fmt.Fprintf(&sb,
-		`<div class="audit-filters"><a href="/audit?filter=all" class="audit-btn%s">All</a><a href="/audit?filter=suspicious" class="audit-btn%s">⚠️ Suspicious only (%d)</a></div>`,
+		`<div class="toolbar"><a href="/audit?filter=all" class="btn btn-ghost%s">All</a><a href="/audit?filter=suspicious" class="btn btn-ghost%s">Suspicious only (%d)</a></div>`,
 		allActive, suspActive, suspCount)
 
 	// Log table
@@ -524,7 +650,7 @@ func auditPage(entries []auditLogEntry, ips []auditTopIP, totalToday, suspCount 
 	</tr></thead><tbody>`)
 
 	if len(entries) == 0 {
-		sb.WriteString(`<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">No records</td></tr>`)
+		sb.WriteString(`<tr><td colspan="7" class="empty-cell">No records</td></tr>`)
 	}
 	for _, e := range entries {
 		rowClass := ""
@@ -546,7 +672,7 @@ func auditPage(entries []auditLogEntry, ips []auditTopIP, totalToday, suspCount 
 			ua = ua[:57] + "…"
 		}
 		fmt.Fprintf(&sb,
-			`<tr%s><td class="audit-ts">%s</td><td class="audit-ip">%s</td><td><code>%s</code></td><td class="audit-path">%s</td><td><span class="status-badge %s">%d</span></td><td class="audit-ua" title="%s">%s</td><td class="audit-note">%s</td></tr>`,
+			`<tr%s><td data-label="Time" class="audit-ts">%s</td><td data-label="IP" class="audit-ip">%s</td><td data-label="Method"><code>%s</code></td><td data-label="Path" class="audit-path">%s</td><td data-label="Status"><span class="status-badge %s">%d</span></td><td data-label="UA" class="audit-ua" title="%s">%s</td><td data-label="Note" class="audit-note">%s</td></tr>`,
 			rowClass,
 			escHTML(e.TS), escHTML(e.IP), escHTML(e.Method), escHTML(e.Path),
 			statusClass, e.Status,
@@ -555,29 +681,79 @@ func auditPage(entries []auditLogEntry, ips []auditTopIP, totalToday, suspCount 
 	}
 	sb.WriteString(`</tbody></table></div>`)
 
-	auditCSS := `
-.audit-summary{display:flex;gap:1rem;margin-bottom:1.2rem;flex-wrap:wrap}
-.audit-stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:.6rem 1.2rem;display:flex;flex-direction:column;align-items:center}
-.audit-stat.audit-suspicious .audit-stat-n{color:var(--yellow)}
-.audit-stat-n{font-size:1.6rem;font-weight:700;color:var(--accent)}
-.audit-stat-l{font-size:.75rem;color:var(--text-muted)}
-.audit-topips{margin-bottom:1rem;font-size:.85rem}
-.audit-ip-badge{display:inline-block;margin:2px 4px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:10px}
-.audit-filters{display:flex;gap:.5rem;margin-bottom:1rem}
-.audit-btn{padding:.35rem .9rem;border-radius:var(--r);background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:.85rem;text-decoration:none}
-.audit-btn.active{background:var(--primary);border-color:var(--primary);color:#fff}
-.audit-row-red{background:rgba(248,113,113,.12)}
-.audit-row-yellow{background:rgba(251,191,36,.10)}
-.audit-ts{font-size:.75rem;color:var(--text-muted);white-space:nowrap}
-.audit-ip{font-size:.8rem;white-space:nowrap;font-family:monospace}
-.audit-path{font-size:.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace}
-.audit-ua{font-size:.75rem;color:var(--text-muted);max-width:200px;cursor:default}
-.audit-note{font-size:.75rem;color:var(--yellow)}
-`
+	return pageWrap("Audit Log", appShell("audit", "Audit Log", "Operational security", sb.String(), true))
+}
 
-	body := fmt.Sprintf(`<div class="container"><h1 style="margin-bottom:1.2rem">🔍 Audit Log</h1>%s</div><style>%s</style>`,
-		sb.String(), auditCSS)
-	return pageWrap("Audit Log", body)
+func dashboardPage(summary dashboardSummary, drafts []draftRow, runs []runRow) string {
+	var sb strings.Builder
+	sb.WriteString(`<div class="metric-grid">`)
+	sb.WriteString(metricCard("Ready drafts", strconv.Itoa(summary.ReadyDrafts), "Awaiting publication", ""))
+	sb.WriteString(metricCard("Open drafts", strconv.Itoa(summary.OpenDrafts), "Publicly visible", "success"))
+	sb.WriteString(metricCard("Recent runs", strconv.Itoa(summary.RecentRuns), "Last 24 hours", ""))
+	sb.WriteString(metricCard("Pending notifications", strconv.Itoa(summary.PendingNotifications), "Not yet sent", "warning"))
+	sb.WriteString(metricCard("Failed runs", strconv.Itoa(summary.FailedRuns), "Last 7 days", "danger"))
+	sb.WriteString(metricCard("Suspicious requests", strconv.Itoa(summary.SuspiciousTotal), "Audit log total", "danger"))
+	sb.WriteString(`</div>`)
+
+	if strings.TrimSpace(summary.LastError) != "" {
+		fmt.Fprintf(&sb, `<section class="panel panel-danger"><h2>Latest failure</h2><p class="muted">%s</p></section>`, escHTML(summary.LastError))
+	}
+
+	sb.WriteString(`<div class="split-grid">`)
+	sb.WriteString(`<section class="panel"><div class="panel-head"><h2>Recent drafts</h2><a href="/drafts">View all</a></div>`)
+	if len(drafts) == 0 {
+		sb.WriteString(`<p class="muted">No ready or open drafts yet.</p>`)
+	} else {
+		sb.WriteString(`<div class="compact-list">`)
+		for _, d := range drafts {
+			due := formatWIB(d.DueDateParsed)
+			if due == "" {
+				due = d.DueDate
+			}
+			fmt.Fprintf(&sb, `<a class="compact-row" href="/drafts/%d"><span><strong>%s</strong><small>%s</small></span><span class="status-badge status-%s">%s</span></a>`,
+				d.ID, escHTML(d.ItemName), escHTML(due), d.DraftStatus, d.DraftStatus)
+		}
+		sb.WriteString(`</div>`)
+	}
+	sb.WriteString(`</section>`)
+
+	sb.WriteString(`<section class="panel"><div class="panel-head"><h2>Recent runs</h2><a href="/runs">View all</a></div>`)
+	if len(runs) == 0 {
+		sb.WriteString(`<p class="muted">No automation runs recorded yet.</p>`)
+	} else {
+		sb.WriteString(`<div class="compact-list">`)
+		for _, r := range runs {
+			fmt.Fprintf(&sb, `<a class="compact-row" href="/runs"><span><strong>%s</strong><small>%s • %d attendance</small></span><span class="status-badge status-%s">%s</span></a>`,
+				escHTML(r.JobName), escHTML(formatMaybeWIB(r.StartedAt)), r.AttendanceSubmitted, statusClass(r.Status), escHTML(r.Status))
+		}
+		sb.WriteString(`</div>`)
+	}
+	sb.WriteString(`</section></div>`)
+
+	return pageWrap("Dashboard", appShell("dashboard", "Dashboard", "Moodle automation command center", sb.String(), true))
+}
+
+func runsPage(runs []runRow) string {
+	var sb strings.Builder
+	if len(runs) == 0 {
+		sb.WriteString(`<div class="empty-state"><p>No automation runs recorded yet.</p></div>`)
+	} else {
+		sb.WriteString(`<div class="table-wrap"><table class="data-table"><thead><tr>
+<th>#</th><th>Status</th><th>Started</th><th>Finished</th><th>Courses</th><th>Attendance</th><th>Signals</th><th>Error</th>
+</tr></thead><tbody>`)
+		for _, r := range runs {
+			signals := fmt.Sprintf("A:%d Q:%d N:%d R:%d D:%d", r.AssignmentsFound, r.QuizzesFound, r.NotificationsSent, r.RemindersSent, r.DraftsReady)
+			errText := r.Error
+			if errText == "" {
+				errText = "-"
+			}
+			fmt.Fprintf(&sb, `<tr><td data-label="#" class="id-cell">%d</td><td data-label="Status"><span class="status-badge status-%s">%s</span></td><td data-label="Started">%s</td><td data-label="Finished">%s</td><td data-label="Courses">%d/%d</td><td data-label="Attendance">%d/%d</td><td data-label="Signals"><code>%s</code></td><td data-label="Error" class="error-cell">%s</td></tr>`,
+				r.ID, statusClass(r.Status), escHTML(r.Status), escHTML(formatMaybeWIB(r.StartedAt)), escHTML(formatMaybeWIB(r.FinishedAt)),
+				r.MatchedCourses, r.TotalCourses, r.AttendanceSubmitted, r.AttendanceFound, escHTML(signals), escHTML(errText))
+		}
+		sb.WriteString(`</tbody></table></div>`)
+	}
+	return pageWrap("Runs", appShell("runs", "Runs", "Recent automation history", sb.String(), true))
 }
 
 func loginPage(question, errMsg string) string {
@@ -586,37 +762,36 @@ func loginPage(question, errMsg string) string {
 		errHTML = fmt.Sprintf(`<p class="err">%s</p>`, errMsg)
 	}
 	return pageWrap("Login – Draft Portal", fmt.Sprintf(`
-<div class="login-box">
-  <div class="login-icon">📝</div>
+<main class="login-screen">
+<section class="login-box">
+  <div class="brand-mark">IBM</div>
+  <p class="eyebrow">Moodle Automation Console</p>
   <h1>Draft Portal</h1>
   <p class="question">%s</p>
   %s
   <form method="POST" action="/auth">
     <input type="text" name="answer" placeholder="Jawaban kamu..." autofocus autocomplete="off">
-    <button type="submit">Masuk →</button>
+    <button type="submit">Masuk</button>
   </form>
-</div>`, question, errHTML))
+</section>
+</main>`, question, errHTML))
 }
 
 func draftsListPage(drafts []draftRow, isAdmin bool) string {
 	var sb strings.Builder
 	title := "Draft Portal"
+	active := "public"
+	kicker := "Published solutions"
 	if isAdmin {
-		title = "Admin — Draft Portal"
+		title = "Drafts"
+		active = "drafts"
+		kicker = "AI-generated coursework drafts"
 	}
-	sb.WriteString(`<div class="container">`)
-	sb.WriteString(`<div class="page-header"><h1>📝 `)
-	sb.WriteString(escHTML(title))
-	sb.WriteString(`</h1>`)
-	if isAdmin {
-		sb.WriteString(`<span class="badge badge-admin">Admin</span>`)
-	}
-	sb.WriteString(`</div>`)
 
 	if len(drafts) == 0 {
-		sb.WriteString(`<div class="empty-state"><p>📭 Belum ada draft tersedia.</p></div>`)
+		sb.WriteString(`<div class="empty-state"><p>Belum ada draft tersedia.</p></div>`)
 	} else {
-		sb.WriteString(`<div class="table-wrap"><table><thead><tr>
+		sb.WriteString(`<div class="table-wrap"><table class="data-table"><thead><tr>
 <th>#</th><th>Mata Kuliah</th><th>Item</th><th>Due</th><th>Status</th><th>Provider</th>`)
 		if isAdmin {
 			sb.WriteString(`<th>Aksi</th>`)
@@ -630,7 +805,7 @@ func draftsListPage(drafts []draftRow, isAdmin bool) string {
 			openBtn := ""
 			if isAdmin && d.DraftStatus == "ready" {
 				openBtn = fmt.Sprintf(
-					`<form method="POST" action="/admin/open/%d" style="display:inline"><button class="btn-open">Publish</button></form>`,
+					`<form method="POST" action="/admin/open/%d" style="display:inline"><button class="btn btn-primary">Publish</button></form>`,
 					d.ID)
 			}
 			due := formatWIB(d.DueDateParsed)
@@ -642,10 +817,10 @@ func draftsListPage(drafts []draftRow, isAdmin bool) string {
 			providerHTML := buildProviderBadges(d.ProvidersList, d.DraftProvider)
 			aclHTML := ""
 			if isAdmin {
-				aclHTML = fmt.Sprintf(`<td>%s</td>`, openBtn)
+				aclHTML = fmt.Sprintf(`<td data-label="Aksi">%s</td>`, openBtn)
 			}
 			fmt.Fprintf(&sb,
-				`<tr><td class="id-cell">%d</td><td class="course-cell">%s</td><td><a href="%s/%d">%s</a></td><td class="due-cell">%s</td><td><span class="status-badge status-%s">%s</span></td><td class="provider-cell">%s</td>%s</tr>`,
+				`<tr><td data-label="#" class="id-cell">%d</td><td data-label="Mata Kuliah" class="course-cell">%s</td><td data-label="Item"><a href="%s/%d">%s</a></td><td data-label="Due" class="due-cell">%s</td><td data-label="Status"><span class="status-badge status-%s">%s</span></td><td data-label="Provider" class="provider-cell">%s</td>%s</tr>`,
 				d.ID, escHTML(d.CourseName),
 				basePath, d.ID, escHTML(d.ItemName),
 				escHTML(due), d.DraftStatus, d.DraftStatus,
@@ -653,15 +828,16 @@ func draftsListPage(drafts []draftRow, isAdmin bool) string {
 		}
 		sb.WriteString(`</tbody></table></div>`)
 	}
-	sb.WriteString(`</div>`)
 
-	return pageWrap(title, sb.String())
+	return pageWrap(title, appShell(active, title, kicker, sb.String(), isAdmin))
 }
 
 func draftDetailPage(d draftRow, isAdmin bool) string {
 	backPath := "/open"
+	active := "public"
 	if isAdmin {
 		backPath = "/drafts"
+		active = "drafts"
 	}
 	due := formatWIB(d.DueDateParsed)
 	if due == "" {
@@ -671,7 +847,7 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
 	// Optional item link chip
 	linkHTML := ""
 	if d.ItemLink != "" {
-		linkHTML = fmt.Sprintf(`<a class="chip chip-link" href="%s" target="_blank" rel="noopener">🔗 Buka Soal</a>`, escHTML(d.ItemLink))
+		linkHTML = fmt.Sprintf(`<a class="chip chip-link" href="%s" target="_blank" rel="noopener">Buka Soal ↗</a>`, escHTML(d.ItemLink))
 	}
 
 	// Optional raw_content artifact (collapsible)
@@ -679,7 +855,7 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
 	if d.RawContent != "" {
 		artifactHTML = fmt.Sprintf(`
 <details class="artifact">
-  <summary>📋 Konteks yang dikirim ke AI</summary>
+  <summary>Konteks yang dikirim ke AI</summary>
   <pre class="artifact-pre">%s</pre>
 </details>`, escHTML(d.RawContent))
 	}
@@ -698,14 +874,14 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
 	}
 
 	body := fmt.Sprintf(`
-<div class="container">
+<div>
   <a class="back-link" href="%s">← Kembali ke daftar</a>
   <div class="detail-header">
     <h1>%s</h1>
     <div class="meta-chips">
-      <span class="chip">📚 %s</span>
-      <span class="chip">📌 %s</span>
-      <span class="chip">⏰ %s</span>
+      <span class="chip">%s</span>
+      <span class="chip">%s</span>
+      <span class="chip">%s</span>
       <span class="status-badge status-%s">%s</span>
       %s
     </div>
@@ -725,7 +901,7 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
 		draftBodyHTML,
 		artifactHTML,
 	)
-	return pageWrap(d.ItemName+" – Draft", body)
+	return pageWrap(d.ItemName+" – Draft", appShell(active, d.ItemName, "Draft detail", body, isAdmin))
 }
 
 func providerEmoji(p string) string {
@@ -739,6 +915,87 @@ func providerEmoji(p string) string {
 	default:
 		return "🤖"
 	}
+}
+
+func metricCard(label, value, detail, tone string) string {
+	cls := "metric-card"
+	if tone != "" {
+		cls += " metric-" + tone
+	}
+	return fmt.Sprintf(`<section class="%s"><span>%s</span><strong>%s</strong><small>%s</small></section>`,
+		cls, escHTML(label), escHTML(value), escHTML(detail))
+}
+
+func appShell(active, title, kicker, body string, authenticated bool) string {
+	nav := []struct {
+		Key   string
+		Href  string
+		Label string
+	}{
+		{"dashboard", "/dashboard", "Dashboard"},
+		{"drafts", "/drafts", "Drafts"},
+		{"public", "/open", "Open drafts"},
+		{"runs", "/runs", "Runs"},
+		{"audit", "/audit", "Audit"},
+	}
+	var navHTML strings.Builder
+	for _, item := range nav {
+		if !authenticated && item.Key != "public" {
+			continue
+		}
+		cls := "shell-nav-link"
+		if item.Key == active {
+			cls += " active"
+		}
+		fmt.Fprintf(&navHTML, `<a class="%s" href="%s">%s</a>`, cls, item.Href, item.Label)
+	}
+	return fmt.Sprintf(`
+<div class="app-shell">
+  <aside class="shell-sidebar">
+    <a class="shell-brand" href="%s"><span class="brand-mark">IBM</span><span>Moodle Console</span></a>
+    <nav class="shell-nav">%s</nav>
+  </aside>
+  <main class="shell-main">
+    <header class="content-header">
+      <p class="eyebrow">%s</p>
+      <h1>%s</h1>
+    </header>
+    %s
+  </main>
+</div>`, shellHome(authenticated), navHTML.String(), escHTML(kicker), escHTML(title), body)
+}
+
+func shellHome(authenticated bool) string {
+	if authenticated {
+		return "/dashboard"
+	}
+	return "/open"
+}
+
+func statusClass(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "open":
+		return "open"
+	case "failed", "error":
+		return "failed"
+	case "ready":
+		return "ready"
+	case "running", "generating":
+		return "generating"
+	default:
+		return "queued"
+	}
+}
+
+func formatMaybeWIB(rfcStr string) string {
+	if strings.TrimSpace(rfcStr) == "" {
+		return "-"
+	}
+	out := formatWIB(rfcStr)
+	if out == "" {
+		return rfcStr
+	}
+	return out
 }
 
 // buildProviderBadges returns HTML pill badges for each successful provider.
@@ -826,246 +1083,47 @@ func escHTML(s string) string {
 
 func pageWrap(title, body string) string {
 	const css = `
-/* ── Reset & tokens ─────────────────────────────────────────────────── */
+/* IBM DESIGN.md inspired dark g100 shell */
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#0f0f1a;
-  --surface:#161625;
-  --surface2:#1e1e32;
-  --border:#2a2a45;
-  --primary:#7c6af7;
-  --primary-dim:#4e45b0;
-  --accent:#64d2ff;
-  --text:#e8e8f0;
-  --text-muted:#888aaa;
-  --text-dim:#555577;
-  --green:#4ade80;
-  --yellow:#fbbf24;
-  --blue:#60a5fa;
-  --red:#f87171;
-  --r:8px;
-  --r-lg:14px;
-  --fs:16px;
+  --bg:#161616;--layer:#262626;--layer-2:#393939;--layer-3:#525252;
+  --border:#393939;--border-strong:#6f6f6f;--text:#f4f4f4;--text-muted:#c6c6c6;--text-subtle:#8d8d8d;
+  --primary:#0f62fe;--primary-hover:#0050e6;--primary-active:#002d9c;
+  --green:#24a148;--yellow:#f1c21b;--red:#da1e28;--blue:#0f62fe;
+  --mono:'IBM Plex Mono','Cascadia Code','Fira Code','Courier New',monospace;
+  --sans:'IBM Plex Sans','Segoe UI',system-ui,-apple-system,sans-serif;
 }
+html{font-size:16px;-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.5;min-height:100vh}
+a{color:#78a9ff;text-decoration:none}a:hover{text-decoration:underline}img{max-width:100%;height:auto}
+code{font-family:var(--mono);font-size:.85em;color:#be95ff}.muted{color:var(--text-muted);font-size:.875rem}.empty-cell{text-align:center;padding:2rem;color:var(--text-subtle)}
 
-/* ── Base ────────────────────────────────────────────────────────────── */
-html{font-size:var(--fs);-webkit-text-size-adjust:100%;scroll-behavior:smooth}
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
-  line-height:1.65;min-height:100vh;padding:1.25rem 1rem}
-a{color:var(--accent);text-decoration:none}
-a:hover{opacity:.8;text-decoration:underline}
-img{max-width:100%;height:auto}
+.app-shell{min-height:100vh;display:grid;grid-template-columns:16rem minmax(0,1fr);background:var(--bg)}
+.shell-sidebar{position:sticky;top:0;height:100vh;background:#0f0f0f;border-right:1px solid var(--border);display:flex;flex-direction:column}
+.shell-brand{height:3rem;display:flex;align-items:center;gap:.75rem;padding:0 1rem;color:var(--text);border-bottom:1px solid var(--border);font-size:.875rem;text-decoration:none}.shell-brand:hover{text-decoration:none}
+.brand-mark{display:inline-flex;align-items:center;justify-content:center;background:var(--primary);color:#fff;height:1.5rem;min-width:2rem;padding:0 .35rem;font-weight:600;font-size:.75rem;letter-spacing:.08em}
+.shell-nav{padding:.5rem 0}.shell-nav-link{display:block;color:var(--text-muted);padding:.75rem 1rem;border-left:3px solid transparent;font-size:.875rem}.shell-nav-link:hover{background:var(--layer);color:var(--text);text-decoration:none}.shell-nav-link.active{background:var(--layer);border-left-color:var(--primary);color:#fff}
+.shell-main{min-width:0;padding:2rem;max-width:1440px;width:100%}.content-header{border-bottom:1px solid var(--border);padding-bottom:1.5rem;margin-bottom:1.5rem}.eyebrow{font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;color:var(--text-subtle);margin-bottom:.5rem}.content-header h1{font-size:clamp(2rem,5vw,3.75rem);font-weight:300;letter-spacing:-.02em;line-height:1.1}
 
-/* ── Layout ──────────────────────────────────────────────────────────── */
-.container{max-width:960px;margin:0 auto;width:100%}
+.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--border);margin-bottom:1.5rem}.metric-card{background:var(--layer);padding:1rem;min-height:9rem;display:flex;flex-direction:column;justify-content:space-between}.metric-card span{font-size:.75rem;color:var(--text-muted)}.metric-card strong{font-size:2.25rem;font-weight:300;line-height:1}.metric-card small{color:var(--text-subtle)}.metric-success strong{color:#42be65}.metric-warning strong{color:var(--yellow)}.metric-danger strong{color:#ff8389}
+.split-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.panel{background:var(--layer);border:1px solid var(--border);padding:1rem;margin-bottom:1rem}.panel-danger{border-left:4px solid var(--red)}.panel h2,.panel-head h2{font-size:1rem;font-weight:400}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem}.compact-list{display:flex;flex-direction:column;border-top:1px solid var(--border)}.compact-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.875rem 0;border-bottom:1px solid var(--border);color:var(--text)}.compact-row:hover{text-decoration:none;background:rgba(255,255,255,.03)}.compact-row span:first-child{min-width:0}.compact-row strong{display:block;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.compact-row small{display:block;color:var(--text-subtle);font-size:.75rem;margin-top:.2rem}
 
-/* ── Page header ─────────────────────────────────────────────────────── */
-.page-header{display:flex;align-items:center;gap:.65rem;margin-bottom:1.5rem;
-  padding-bottom:.85rem;border-bottom:1px solid var(--border);flex-wrap:wrap}
-.page-header h1{font-size:clamp(1.15rem,4vw,1.5rem);font-weight:700;color:#fff}
+.toolbar{display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap}.btn{border:0;border-radius:0;display:inline-flex;align-items:center;justify-content:center;min-height:2.5rem;padding:.65rem 1rem;font:inherit;font-size:.875rem;cursor:pointer;text-decoration:none}.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-hover);text-decoration:none}.btn-ghost{background:transparent;color:#78a9ff}.btn-ghost:hover,.btn-ghost.active{background:var(--layer-2);text-decoration:none}.btn-open{background:var(--primary);color:#fff;border:0;border-radius:0;padding:.65rem 1rem;cursor:pointer}
 
-/* ── Badges ──────────────────────────────────────────────────────────── */
-.badge-admin{background:var(--primary-dim);color:#c8c0ff;font-size:.68rem;
-  padding:.2rem .55rem;border-radius:99px;text-transform:uppercase;letter-spacing:.05em}
-.status-badge{display:inline-block;padding:.2rem .6rem;border-radius:99px;
-  font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
-.status-ready{background:rgba(251,191,36,.15);color:var(--yellow)}
-.status-open{background:rgba(74,222,128,.15);color:var(--green)}
-.status-generating{background:rgba(96,165,250,.15);color:var(--blue)}
+.table-wrap{overflow-x:auto;border:1px solid var(--border);background:var(--layer);-webkit-overflow-scrolling:touch}table{width:100%;border-collapse:collapse;font-size:.875rem}.data-table thead,thead{background:#0f0f0f}th{padding:.75rem 1rem;text-align:left;color:var(--text-muted);font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}td{padding:.75rem 1rem;border-top:1px solid var(--border);vertical-align:top}tbody tr:hover td{background:rgba(255,255,255,.03)}.id-cell{color:var(--text-subtle);font-family:var(--mono);width:4rem}.course-cell,.due-cell,.provider-cell{color:var(--text-muted)}.error-cell{max-width:22rem;color:#ffb3b8;word-break:break-word}
+.status-badge{display:inline-flex;align-items:center;min-height:1.5rem;padding:.125rem .5rem;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;border:1px solid var(--border-strong);color:var(--text);background:transparent}.status-ready{border-color:var(--yellow);color:var(--yellow)}.status-open{border-color:var(--green);color:#42be65}.status-generating{border-color:#78a9ff;color:#78a9ff}.status-failed{border-color:#ff8389;color:#ff8389}.status-queued{border-color:var(--border-strong);color:var(--text-muted)}
+.provider-badge,.chip{display:inline-flex;align-items:center;gap:.25rem;font-size:.75rem;padding:.25rem .5rem;border:1px solid var(--border);background:var(--layer-2);color:var(--text-muted);margin:1px 2px}.chip-row{display:flex;flex-wrap:wrap;gap:.35rem}.chip-link{color:#78a9ff;border-color:#78a9ff}.meta-chips{display:flex;flex-wrap:wrap;gap:.4rem;margin:.75rem 0}.updated-at{font-size:.75rem;color:var(--text-subtle)}
+.empty-state{background:var(--layer);border:1px solid var(--border);padding:3rem 1rem;text-align:center;color:var(--text-muted)}
 
-/* ── List table ──────────────────────────────────────────────────────── */
-.table-wrap{overflow-x:auto;border-radius:var(--r-lg);border:1px solid var(--border);
-  -webkit-overflow-scrolling:touch}
-table{width:100%;border-collapse:collapse;font-size:.88rem}
-thead{background:var(--surface2)}
-th{padding:.7rem .9rem;text-align:left;color:var(--text-muted);font-size:.75rem;
-  font-weight:600;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
-td{padding:.65rem .9rem;border-top:1px solid var(--border);vertical-align:middle}
-tbody tr:active td,tbody tr:hover td{background:var(--surface2)}
-.id-cell{color:var(--text-dim);font-size:.78rem;width:2.5rem}
-.course-cell{color:var(--text-muted);font-size:.83rem}
-.due-cell{white-space:nowrap;font-size:.8rem;color:var(--text-muted)}
-.provider-cell{font-size:.8rem;color:var(--text-muted);white-space:nowrap}
-.provider-badge{display:inline-block;font-size:.75rem;padding:2px 6px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);margin:1px 2px;white-space:nowrap}
+.login-screen{min-height:100vh;display:grid;place-items:center;padding:1rem;background:linear-gradient(135deg,#0f0f0f,#161616)}.login-box{width:min(100%,28rem);background:var(--layer);border:1px solid var(--border);padding:2rem}.login-box h1{font-size:2.625rem;font-weight:300;margin:.5rem 0}.question{color:var(--text-muted);margin-bottom:1.5rem}.login-box input{width:100%;height:3rem;background:#f4f4f4;color:#161616;border:0;border-bottom:2px solid var(--border-strong);padding:0 1rem;font-size:1rem;margin-bottom:1rem}.login-box input:focus{outline:2px solid var(--primary);outline-offset:-2px}.login-box button{width:100%;height:3rem;background:var(--primary);color:#fff;border:0;border-radius:0;font-size:.875rem;cursor:pointer}.err{color:#ffb3b8;background:rgba(218,30,40,.18);border-left:4px solid var(--red);padding:.75rem;margin-bottom:1rem}
 
-/* ── Buttons ─────────────────────────────────────────────────────────── */
-.btn-open{background:var(--green);color:#0a2010;border:none;
-  padding:.35rem .8rem;border-radius:6px;cursor:pointer;font-size:.78rem;
-  font-weight:600;min-height:32px;touch-action:manipulation}
-.btn-open:active{opacity:.8}
+.back-link{display:inline-flex;align-items:center;min-height:2.5rem;color:#78a9ff;margin-bottom:1rem}.detail-header{background:var(--layer);border:1px solid var(--border);padding:1rem;margin-bottom:1rem}.detail-header h1{font-size:clamp(1.5rem,4vw,2.625rem);font-weight:300;line-height:1.15}.tab-bar{display:flex;flex-wrap:wrap;gap:0;background:#0f0f0f;border:1px solid var(--border);border-bottom:0}.tab{background:transparent;border:0;border-right:1px solid var(--border);color:var(--text-muted);padding:.75rem 1rem;cursor:pointer}.tab.active{background:var(--layer);color:#fff;border-top:3px solid var(--primary)}.tab-panel{display:none;background:var(--layer);border:1px solid var(--border);padding:1.5rem;line-height:1.7;overflow-x:hidden}.tab-panel.active{display:block}.provider-meta{font-size:.75rem;color:var(--text-subtle);padding-bottom:.75rem;margin-bottom:1rem;border-bottom:1px solid var(--border)}.provider-model{background:var(--layer-2);color:#78a9ff;padding:.125rem .35rem;margin-left:.25rem}
+.tab-panel h1,.tab-panel h2,.draft-body h1,.draft-body h2{font-weight:400;margin:1.5rem 0 .5rem}.tab-panel h1,.draft-body h1{font-size:1.5rem}.tab-panel h2,.draft-body h2{font-size:1.25rem}.tab-panel h3,.draft-body h3{font-size:1rem;margin:1rem 0 .35rem}.tab-panel p,.draft-body p{margin:.75rem 0}.tab-panel ul,.tab-panel ol,.draft-body ul,.draft-body ol{margin:.5rem 0 .5rem 1.5rem}.tab-panel blockquote,.draft-body blockquote{border-left:4px solid var(--primary);padding:.5rem 1rem;background:rgba(15,98,254,.12);color:var(--text-muted);margin:1rem 0}.tab-panel pre,.draft-body pre{background:#0f0f0f;border:1px solid var(--border);padding:1rem;overflow-x:auto}.tab-panel code,.draft-body code{font-family:var(--mono)}.table-scroll{overflow-x:auto;border:1px solid var(--border);margin:1rem 0}.tab-panel table,.draft-body table{width:max-content;min-width:100%}.artifact{margin-top:1rem;background:var(--layer);border:1px solid var(--border)}.artifact summary{padding:1rem;cursor:pointer;color:var(--text-muted)}.artifact[open] summary{border-bottom:1px solid var(--border)}.artifact-pre{padding:1rem;white-space:pre-wrap;word-break:break-word;color:var(--text-muted);font-family:var(--mono);font-size:.8rem;overflow-x:auto}
+.audit-row-red{background:rgba(218,30,40,.18)}.audit-row-yellow{background:rgba(241,194,27,.12)}.audit-ts,.audit-ip,.audit-path,.audit-ua,.audit-note{font-size:.75rem}.audit-ip,.audit-path{font-family:var(--mono)}.audit-path{max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.audit-ua{color:var(--text-subtle)}.audit-note{color:var(--yellow)}
 
-/* ── Empty ───────────────────────────────────────────────────────────── */
-.empty-state{text-align:center;padding:3rem 1rem;color:var(--text-muted)}
-
-/* ── Login ───────────────────────────────────────────────────────────── */
-.login-box{max-width:380px;margin:3rem auto;background:var(--surface);
-  padding:2rem 1.5rem;border-radius:var(--r-lg);border:1px solid var(--border);text-align:center}
-.login-icon{font-size:2.2rem;margin-bottom:.75rem}
-.login-box h1{font-size:1.35rem;color:#fff;margin-bottom:.4rem}
-.question{color:var(--text-muted);margin-bottom:1.25rem;font-size:.92rem}
-.login-box input{width:100%;padding:.75rem 1rem;background:var(--surface2);
-  border:1px solid var(--border);color:var(--text);border-radius:var(--r);
-  font-size:1rem;margin-bottom:.85rem;outline:none;
-  -webkit-appearance:none;appearance:none;transition:border-color .2s}
-.login-box input:focus{border-color:var(--primary)}
-.login-box button{width:100%;padding:.8rem;background:var(--primary);color:#fff;border:none;
-  border-radius:var(--r);cursor:pointer;font-size:1rem;font-weight:600;
-  min-height:48px;touch-action:manipulation;transition:background .15s}
-.login-box button:active{background:var(--primary-dim)}
-.err{color:var(--red);font-size:.85rem;margin-bottom:.85rem;
-  background:rgba(248,113,113,.1);padding:.5rem .75rem;border-radius:6px}
-
-/* ── Back link ───────────────────────────────────────────────────────── */
-.back-link{display:inline-flex;align-items:center;gap:.3rem;color:var(--text-muted);
-  font-size:.875rem;margin-bottom:1rem;padding:.35rem 0;min-height:44px;
-  vertical-align:middle}
-.back-link:hover,.back-link:active{color:var(--accent);text-decoration:none}
-
-/* ── Detail header ───────────────────────────────────────────────────── */
-.detail-header{background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--r-lg);padding:1.25rem;margin-bottom:1.25rem}
-.detail-header h1{font-size:clamp(1rem,4vw,1.3rem);color:#fff;
-  margin-bottom:.75rem;line-height:1.4;word-break:break-word}
-.meta-chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.5rem}
-.chip{background:var(--surface2);border:1px solid var(--border);
-  color:var(--text-muted);font-size:.75rem;padding:.22rem .6rem;
-  border-radius:99px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
-.chip-link{color:var(--accent);border-color:var(--accent);opacity:.85}
-.chip-link:hover{opacity:1;background:rgba(100,210,255,.08)}
-.updated-at{font-size:.72rem;color:var(--text-dim);margin-top:.35rem}
-
-/* ── Tab bar (multi-provider comparison) ────────────────────────────── */
-.tab-bar{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:0;
-  padding:.6rem 1rem;background:var(--surface);
-  border:1px solid var(--border);border-radius:var(--r-lg) var(--r-lg) 0 0}
-.tab{background:transparent;border:1px solid var(--border);border-radius:var(--r);
-  color:var(--text-muted);padding:.38rem .85rem;cursor:pointer;font-size:.82rem;
-  transition:background .15s,color .15s;white-space:nowrap}
-.tab.active{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
-.tab:hover:not(.active){background:rgba(124,106,247,.12);color:var(--text)}
-.tab-panels{border:1px solid var(--border);border-top:none;
-  border-radius:0 0 var(--r-lg) var(--r-lg)}
-.tab-panel{display:none;padding:1.35rem 1.5rem;line-height:1.8;overflow-x:hidden;word-break:break-word}
-.tab-panel.active{display:block}
-.provider-meta{font-size:.75rem;color:var(--text-dim);margin-bottom:1rem;padding-bottom:.6rem;
-  border-bottom:1px solid var(--border)}
-.provider-model{background:rgba(100,210,255,.1);color:var(--accent);
-  border-radius:4px;padding:.1rem .35rem;margin-left:.3rem;font-size:.72rem}
-.provider-error{background:rgba(255,80,80,.08);border:1px solid rgba(255,80,80,.3);
-  border-radius:var(--r);padding:.9rem 1rem;color:#ff9090;font-size:.85rem;line-height:1.6}
-/* Make tab-panel content inherit draft-body styles */
-.tab-panel h1,.tab-panel h2,.tab-panel h3,.tab-panel h4,
-.tab-panel p,.tab-panel ul,.tab-panel ol,.tab-panel li,
-.tab-panel strong,.tab-panel em,.tab-panel blockquote,
-.tab-panel code,.tab-panel pre,.tab-panel table,.tab-panel thead,.tab-panel th,.tab-panel td{
-  /* inherit via parent selector below */
-}
-.tab-panels h1{font-size:clamp(1.05rem,3.5vw,1.3rem);color:#fff;
-  margin:1.4rem 0 .55rem;padding-bottom:.35rem;border-bottom:1px solid var(--border)}
-.tab-panels h2{font-size:clamp(1rem,3vw,1.15rem);color:#c8c8ff;margin:1.25rem 0 .45rem}
-.tab-panels h3{font-size:.98rem;color:#aaaadd;margin:1.1rem 0 .35rem}
-.tab-panels h4{font-size:.93rem;color:var(--text-muted);margin:.9rem 0 .25rem}
-.tab-panels p{margin:.65rem 0}
-.tab-panels ul,.tab-panels ol{margin:.45rem 0 .45rem 1.4rem}
-.tab-panels li{margin:.22rem 0}
-.tab-panels strong{color:#fff}
-.tab-panels em{color:#c8d0ff}
-.tab-panels blockquote{border-left:3px solid var(--primary);padding:.45rem .9rem;
-  color:var(--text-muted);background:rgba(124,106,247,.07);
-  border-radius:0 6px 6px 0;margin:.65rem 0}
-.tab-panels code{background:#0d1420;color:#a5d8ff;padding:.1rem .3rem;
-  border-radius:4px;font-family:'Cascadia Code','Fira Code','Courier New',monospace;
-  font-size:.85em;word-break:break-all}
-.tab-panels pre{background:#0d1420;border:1px solid var(--border);
-  padding:.9rem 1rem;border-radius:var(--r);overflow-x:auto;margin:.75rem 0;
-  -webkit-overflow-scrolling:touch}
-.tab-panels pre code{background:transparent;padding:0;color:#cde8ff;
-  font-size:.82rem;word-break:normal}
-.tab-panels .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;
-  margin:.9rem 0;border-radius:var(--r);border:1px solid var(--border)}
-.tab-panels table{width:max-content;min-width:100%;border-collapse:collapse;font-size:.82rem;margin:0}
-.tab-panels thead{background:rgba(124,106,247,.15)}
-.tab-panels th{padding:.5rem .8rem;text-align:left;color:#c0bcff;font-size:.75rem;
-  font-weight:700;text-transform:uppercase;letter-spacing:.04em}
-.tab-panels td{padding:.45rem .8rem;border-top:1px solid var(--border)}
-
-/* ── Artifact / context collapsible ─────────────────────────────────── */
-.artifact{margin-top:1.5rem;border:1px solid var(--border);border-radius:var(--r);
-  background:var(--surface)}
-.artifact summary{padding:.65rem 1rem;cursor:pointer;font-size:.82rem;
-  color:var(--text-muted);user-select:none;list-style:none;display:flex;align-items:center;gap:.4rem}
-.artifact summary::-webkit-details-marker{display:none}
-.artifact[open] summary{border-bottom:1px solid var(--border);color:var(--text)}
-.artifact-pre{padding:1rem;font-size:.78rem;line-height:1.6;color:#aabbcc;
-  font-family:'Cascadia Code','Fira Code','Courier New',monospace;
-  white-space:pre-wrap;word-break:break-word;overflow-x:auto;
-  -webkit-overflow-scrolling:touch}
-
-/* ── Draft body ──────────────────────────────────────────────────────── */
-.draft-body{background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--r-lg);padding:1.35rem 1.5rem;line-height:1.8;
-  overflow-x:hidden;word-break:break-word}
-.draft-body h1{font-size:clamp(1.05rem,3.5vw,1.3rem);color:#fff;
-  margin:1.4rem 0 .55rem;padding-bottom:.35rem;border-bottom:1px solid var(--border)}
-.draft-body h2{font-size:clamp(1rem,3vw,1.15rem);color:#c8c8ff;margin:1.25rem 0 .45rem}
-.draft-body h3{font-size:.98rem;color:#aaaadd;margin:1.1rem 0 .35rem}
-.draft-body h4{font-size:.93rem;color:var(--text-muted);margin:.9rem 0 .25rem}
-.draft-body p{margin:.65rem 0}
-.draft-body ul,.draft-body ol{margin:.45rem 0 .45rem 1.4rem}
-.draft-body li{margin:.22rem 0}
-.draft-body strong{color:#fff}
-.draft-body em{color:#c8d0ff}
-.draft-body blockquote{border-left:3px solid var(--primary);padding:.45rem .9rem;
-  color:var(--text-muted);background:rgba(124,106,247,.07);
-  border-radius:0 6px 6px 0;margin:.65rem 0}
-
-/* Inline & block code */
-.draft-body code{background:#0d1420;color:#a5d8ff;padding:.1rem .3rem;
-  border-radius:4px;font-family:'Cascadia Code','Fira Code','Courier New',monospace;
-  font-size:.85em;word-break:break-all}
-.draft-body pre{background:#0d1420;border:1px solid var(--border);
-  padding:.9rem 1rem;border-radius:var(--r);overflow-x:auto;margin:.75rem 0;
-  -webkit-overflow-scrolling:touch}
-.draft-body pre code{background:transparent;padding:0;color:#cde8ff;
-  font-size:.82rem;word-break:normal}
-
-/* Scroll containers around markdown tables */
-.draft-body .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;
-  margin:.9rem 0;border-radius:var(--r);border:1px solid var(--border)}
-.draft-body table{width:max-content;min-width:100%;border-collapse:collapse;
-  font-size:.82rem;margin:0}
-.draft-body thead{background:rgba(124,106,247,.15)}
-.draft-body th{padding:.5rem .8rem;text-align:left;color:#c0bcff;font-size:.75rem;
-  font-weight:700;text-transform:uppercase;letter-spacing:.04em;
-  white-space:nowrap;border-bottom:2px solid var(--primary-dim)}
-.draft-body td{padding:.45rem .8rem;border-top:1px solid var(--border);
-  color:var(--text);vertical-align:top}
-.draft-body tbody tr:hover td,.draft-body tbody tr:active td{
-  background:rgba(124,106,247,.06)}
-.draft-body hr{border:none;border-top:1px solid var(--border);margin:1.35rem 0}
-
-/* KaTeX display math centering */
-.draft-body .katex-display{overflow-x:auto;overflow-y:hidden;
-  padding:.5rem 0;-webkit-overflow-scrolling:touch}
-
-/* ── Responsive ──────────────────────────────────────────────────────── */
-@media(max-width:480px){
-  body{padding:.85rem .65rem}
-  .draft-body{padding:1rem .85rem}
-  .detail-header{padding:1rem .9rem}
-  .page-header h1{font-size:1.1rem}
-  /* Stack table columns on very small screens */
-  .table-wrap table thead{display:none}
-  .table-wrap table td{
-    display:block;padding:.45rem .75rem;border-top:none;border-bottom:1px solid var(--border)
-  }
-  .table-wrap table td::before{
-    content:attr(data-label);display:block;
-    font-size:.68rem;text-transform:uppercase;color:var(--text-dim);margin-bottom:.15rem
-  }
-  .table-wrap table tr{border-top:2px solid var(--border);display:block;margin-bottom:.25rem}
-  .id-cell{display:none}
-}`
+@media(max-width:900px){.app-shell{grid-template-columns:1fr}.shell-sidebar{position:relative;height:auto}.shell-nav{display:flex;overflow-x:auto;padding:0}.shell-nav-link{border-left:0;border-bottom:3px solid transparent;white-space:nowrap}.shell-nav-link.active{border-bottom-color:var(--primary);border-left:0}.shell-main{padding:1rem}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.split-grid{grid-template-columns:1fr}}
+@media(max-width:560px){.metric-grid{grid-template-columns:1fr}.content-header h1{font-size:2rem}.table-wrap table thead{display:none}.table-wrap table tr{display:block;border-top:1px solid var(--border);padding:.5rem 0}.table-wrap table td{display:block;border-top:0;padding:.35rem .75rem}.table-wrap table td::before{content:attr(data-label);display:block;font-size:.65rem;color:var(--text-subtle);text-transform:uppercase;letter-spacing:.06em}.id-cell{display:none}.compact-row{align-items:flex-start;flex-direction:column}}
+`
 
 	// KaTeX CDN (loaded async – no render-blocking)
 	const katexHead = `
@@ -1091,7 +1149,7 @@ document.addEventListener("DOMContentLoaded",function(){
 	sb.WriteString("<!DOCTYPE html>\n<html lang=\"id\">\n<head>\n")
 	sb.WriteString("<meta charset=\"utf-8\">\n")
 	sb.WriteString("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n")
-	sb.WriteString("<meta name=\"theme-color\" content=\"#0f0f1a\">\n")
+	sb.WriteString("<meta name=\"theme-color\" content=\"#161616\">\n")
 	sb.WriteString("<title>")
 	sb.WriteString(escHTML(title))
 	sb.WriteString("</title>\n")
