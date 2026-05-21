@@ -169,7 +169,7 @@ SELECT ne.id, ne.event_type, ne.course_id, ne.course_name, ne.item_title, ne.ite
 FROM notification_events ne
 LEFT JOIN item_details idt ON idt.event_id=ne.id
 LEFT JOIN draft_reviews dr ON dr.event_id=ne.id
-WHERE ne.draft_status IN ('ready','open') AND ne.draft_text<>'' AND COALESCE(dr.status,'') NOT IN ('ready','reviewed')
+WHERE ne.draft_status IN ('ready','open') AND ne.draft_text<>'' AND COALESCE(dr.status,'') NOT IN ('ready','reviewed','finalized')
 ORDER BY ne.id ASC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query drafts needing review: %w", err)
