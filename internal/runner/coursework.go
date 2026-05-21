@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -63,21 +64,55 @@ Course materials:
 
 Draft answer to finalize:
 %s`, item.CourseName, item.ItemName, item.DueDate, item.RawContent, corpus, item.DraftText)
-		resp, err := r.LLMClient.GetSuggestion(ctx, llm.SuggestionRequest{EventType: item.EventType, CourseName: item.CourseName, ItemName: item.ItemName, ItemTitle: "Submission finalization", Content: prompt, MaxTokens: 1200})
+		finalized, model, tokens, err := r.finalizeSubmissionAnswer(ctx, item, prompt)
 		if err != nil {
 			r.Log.Warn().Err(err).Int64("event_id", item.ID).Msg("draft finalization failed")
 			continue
 		}
-		score, notes, final := parseReview(resp.Suggestion)
+		score, notes, final := parseReview(finalized)
 		if strings.TrimSpace(final) == "" {
-			final = resp.Suggestion
+			final = finalized
 		}
-		if err := r.NotificationStore.UpsertDraftReview(ctx, notify.DraftReview{EventID: item.ID, Status: "finalized", Score: score, Notes: notes, ReviewedText: final, Model: resp.Model, TokensUsed: resp.TokensUsed}); err != nil {
+		if err := r.NotificationStore.UpsertDraftReview(ctx, notify.DraftReview{EventID: item.ID, Status: "finalized", Score: score, Notes: notes, ReviewedText: final, Model: model, TokensUsed: tokens}); err != nil {
 			return err
 		}
 		r.Log.Info().Int64("event_id", item.ID).Int("score", score).Msg("draft finalized for submission")
 	}
 	return nil
+}
+
+func (r *Runner) finalizeSubmissionAnswer(ctx context.Context, item notify.NotificationEvent, prompt string) (text string, model string, tokens int, err error) {
+	if r.LLMClient != nil {
+		resp, err := r.LLMClient.GetSuggestion(ctx, llm.SuggestionRequest{EventType: item.EventType, CourseName: item.CourseName, ItemName: item.ItemName, ItemTitle: "Submission finalization", Content: prompt, MaxTokens: 1200})
+		if err == nil && strings.TrimSpace(resp.Suggestion) != "" {
+			return resp.Suggestion, resp.Model, resp.TokensUsed, nil
+		}
+		r.Log.Warn().Err(err).Int64("event_id", item.ID).Msg("openrouter finalization failed; trying copilot fallback")
+	}
+	out, err := runCopilotFinalizer(ctx, prompt)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return out, "copilot-finalizer", 0, nil
+}
+
+func runCopilotFinalizer(ctx context.Context, prompt string) (string, error) {
+	cmd := exec.CommandContext(ctx, "copilot", "-p", prompt, "--allow-all-tools")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("copilot finalizer: %w: %s", err, string(out))
+	}
+	text := stripFinalizerFooter(string(out))
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("copilot finalizer returned empty output")
+	}
+	return text, nil
+}
+
+var finalizerFooterRE = regexp.MustCompile(`(?m)^(Changes|Requests|Tokens):\s*\d+.*$`)
+
+func stripFinalizerFooter(out string) string {
+	return strings.TrimSpace(finalizerFooterRE.ReplaceAllString(out, ""))
 }
 
 func (r *Runner) processPDFArtifacts(ctx context.Context) error {
