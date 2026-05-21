@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +34,7 @@ func newServer(cfg config, db *sql.DB) *server {
 	mux.HandleFunc("GET /dashboard", s.requireAuth(s.handleDashboard))
 	mux.HandleFunc("GET /drafts", s.requireAuth(s.handleListDrafts))
 	mux.HandleFunc("GET /drafts/{id}", s.requireAuth(s.handleViewDraft))
+	mux.HandleFunc("GET /artifacts/{id}/{kind}", s.requireAuth(s.handleArtifact))
 	mux.HandleFunc("GET /open", s.handleListOpen)
 	mux.HandleFunc("GET /open/{id}", s.handleViewOpen)
 	mux.HandleFunc("POST /admin/open/{id}", s.requireAuth(s.handleMarkOpen))
@@ -457,6 +460,70 @@ func (s *server) handleApprovePDF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, fmt.Sprintf("/drafts/%d", id), http.StatusFound)
+}
+
+func (s *server) handleArtifact(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	kind := strings.ToLower(strings.TrimSpace(r.PathValue("kind")))
+	if kind != "pdf" && kind != "html" {
+		http.Error(w, "invalid artifact kind", http.StatusBadRequest)
+		return
+	}
+
+	var relPath string
+	column := "pdf_path"
+	if kind == "html" {
+		column = "html_path"
+	}
+	query := fmt.Sprintf("SELECT %s FROM submission_artifacts WHERE event_id = ? AND status IN ('ready','html_ready')", column)
+	if err := s.db.QueryRowContext(r.Context(), query, id).Scan(&relPath); err != nil || strings.TrimSpace(relPath) == "" {
+		http.Error(w, "artifact not found", http.StatusNotFound)
+		return
+	}
+
+	fullPath, ok := s.safeArtifactPath(relPath)
+	if !ok {
+		http.Error(w, "invalid artifact path", http.StatusForbidden)
+		return
+	}
+	if _, err := os.Stat(fullPath); err != nil {
+		http.Error(w, "artifact file missing", http.StatusNotFound)
+		return
+	}
+	if kind == "pdf" {
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="draft-%d.pdf"`, id))
+	} else {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	}
+	http.ServeFile(w, r, fullPath)
+}
+
+func (s *server) safeArtifactPath(relPath string) (string, bool) {
+	relPath = strings.TrimSpace(relPath)
+	if relPath == "" || filepath.IsAbs(relPath) {
+		return "", false
+	}
+	clean := filepath.Clean(relPath)
+	if clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
+		return "", false
+	}
+	base, err := filepath.Abs(s.cfg.DataDir)
+	if err != nil {
+		return "", false
+	}
+	full, err := filepath.Abs(filepath.Join(base, clean))
+	if err != nil {
+		return "", false
+	}
+	if full != base && !strings.HasPrefix(full, base+string(filepath.Separator)) {
+		return "", false
+	}
+	return full, true
 }
 
 func (s *server) handleRuns(w http.ResponseWriter, r *http.Request) {
@@ -956,6 +1023,13 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
 		if d.Artifact.Approved {
 			approved = "approved"
 		}
+		artifactLinks := ""
+		if d.Artifact.PDFPath != "" {
+			artifactLinks += fmt.Sprintf(`<a class="btn btn-primary" href="/artifacts/%d/pdf" target="_blank" rel="noopener">Open PDF</a>`, d.ID)
+		}
+		if d.Artifact.HTMLPath != "" {
+			artifactLinks += fmt.Sprintf(` <a class="btn btn-ghost" href="/artifacts/%d/html" target="_blank" rel="noopener">Open HTML</a>`, d.ID)
+		}
 		approveBtn := ""
 		if isAdmin && d.Artifact.Status == "ready" && !d.Artifact.Approved {
 			approveBtn = fmt.Sprintf(`<form method="POST" action="/admin/approve-pdf/%d" style="display:inline"><button class="btn btn-primary">Approve for submission</button></form>`, d.ID)
@@ -963,12 +1037,13 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
 		pdfHTML = fmt.Sprintf(`
 <section class="panel">
   <div class="panel-head"><h2>PDF artifact</h2><span class="status-badge status-%s">%s</span></div>
+  <div class="toolbar">%s</div>
   <p class="muted">PDF: <code>%s</code></p>
   <p class="muted">HTML: <code>%s</code></p>
   <p class="muted">Approval: %s %s</p>
   <p class="error-cell">%s</p>
   %s
-</section>`, statusClass(d.Artifact.Status), escHTML(d.Artifact.Status), escHTML(d.Artifact.PDFPath), escHTML(d.Artifact.HTMLPath), escHTML(approved), escHTML(d.Artifact.ApprovedAt), escHTML(d.Artifact.Error), approveBtn)
+</section>`, statusClass(d.Artifact.Status), escHTML(d.Artifact.Status), artifactLinks, escHTML(d.Artifact.PDFPath), escHTML(d.Artifact.HTMLPath), escHTML(approved), escHTML(d.Artifact.ApprovedAt), escHTML(d.Artifact.Error), approveBtn)
 	}
 
 	// Build draft body — tab UI if we have multi-provider results, otherwise plain render.

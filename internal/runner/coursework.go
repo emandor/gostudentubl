@@ -34,7 +34,7 @@ func (r *Runner) processDraftReviews(ctx context.Context) error {
 	}
 	for _, item := range items {
 		materials, _ := r.NotificationStore.ListCourseMaterials(ctx, item.CourseID, 8)
-		corpus := buildCorpus(materials, 10000)
+		corpus := buildCorpus(materials, 3500)
 		prompt := fmt.Sprintf(`Review and improve this coursework draft using the course materials.
 Return in this exact structure:
 SCORE: <0-100>

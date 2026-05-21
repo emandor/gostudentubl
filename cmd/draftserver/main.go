@@ -8,12 +8,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite"
 )
 
 type config struct {
 	DBPath           string
+	DataDir          string
 	ServerPort       string
 	SecurityQuestion string
 	SecurityAnswer   string
@@ -24,6 +26,13 @@ func loadConfig() config {
 	dbPath := os.Getenv("DRAFT_DB_PATH")
 	if dbPath == "" {
 		dbPath = "notifications.db"
+	}
+	dataDir := os.Getenv("DRAFT_DATA_DIR")
+	if dataDir == "" {
+		dataDir = filepath.Dir(dbPath)
+		if dataDir == "." || dataDir == "" {
+			dataDir = "."
+		}
 	}
 	port := os.Getenv("DRAFT_SERVER_PORT")
 	if port == "" {
@@ -49,6 +58,7 @@ func loadConfig() config {
 
 	return config{
 		DBPath:           dbPath,
+		DataDir:          dataDir,
 		ServerPort:       port,
 		SecurityQuestion: question,
 		SecurityAnswer:   answer,
