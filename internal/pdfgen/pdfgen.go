@@ -63,16 +63,19 @@ func Generate(ctx context.Context, ev notify.NotificationEvent, review notify.Dr
 	if err := os.WriteFile(manifestPath, []byte(buildManifest(ev, opts, kind)), 0o644); err != nil {
 		return Result{}, err
 	}
-	chromeConfigDir, err := os.MkdirTemp("", "gostudentubl-chromium-config-*")
+	chromeTmpRoot := filepath.Join(dir, ".chromium-tmp")
+	if err := os.MkdirAll(chromeTmpRoot, 0o755); err != nil {
+		return Result{HTMLPath: htmlPath, PDFPath: pdfPath, ManifestPath: manifestPath, Kind: kind}, fmt.Errorf("create chromium temp root: %w", err)
+	}
+	defer os.RemoveAll(chromeTmpRoot)
+	chromeConfigDir, err := os.MkdirTemp(chromeTmpRoot, "config-*")
 	if err != nil {
 		return Result{HTMLPath: htmlPath, PDFPath: pdfPath, ManifestPath: manifestPath, Kind: kind}, fmt.Errorf("create chromium config dir: %w", err)
 	}
-	defer os.RemoveAll(chromeConfigDir)
-	chromeProfileDir, err := os.MkdirTemp("", "gostudentubl-chromium-profile-*")
+	chromeProfileDir, err := os.MkdirTemp(chromeTmpRoot, "profile-*")
 	if err != nil {
 		return Result{HTMLPath: htmlPath, PDFPath: pdfPath, ManifestPath: manifestPath, Kind: kind}, fmt.Errorf("create chromium profile dir: %w", err)
 	}
-	defer os.RemoveAll(chromeProfileDir)
 
 	cmd := exec.CommandContext(ctx, opts.ChromiumPath,
 		"--headless",
@@ -84,7 +87,7 @@ func Generate(ctx context.Context, ev notify.NotificationEvent, review notify.Dr
 		"--print-to-pdf="+pdfPath,
 		"file://"+absHTMLPath,
 	)
-	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+chromeConfigDir)
+	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+chromeConfigDir, "TMPDIR="+chromeTmpRoot)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return Result{HTMLPath: htmlPath, PDFPath: pdfPath, ManifestPath: manifestPath, Kind: kind}, fmt.Errorf("chromium pdf failed: %w: %s", err, string(out))
