@@ -55,7 +55,7 @@ Course materials:
 
 Draft to review:
 %s`, item.CourseName, item.ItemName, item.DueDate, item.RawContent, corpus, item.DraftText)
-		resp, err := r.LLMClient.GetSuggestion(ctx, llm.SuggestionRequest{EventType: item.EventType, CourseName: item.CourseName, ItemName: item.ItemName, ItemTitle: "Draft review", Content: prompt, MaxTokens: 3500})
+		resp, err := r.LLMClient.GetSuggestion(ctx, llm.SuggestionRequest{EventType: item.EventType, CourseName: item.CourseName, ItemName: item.ItemName, ItemTitle: "Draft review", Content: prompt, MaxTokens: 1200})
 		if err != nil {
 			r.Log.Warn().Err(err).Int64("event_id", item.ID).Msg("draft review failed")
 			continue
