@@ -104,6 +104,7 @@ func buildHTML(ev notify.NotificationEvent, review notify.DraftReview, opts Opti
 		answer = ev.DraftText
 	}
 	answer = normalizeSubmissionText(answer)
+	answer = applyStudentIdentity(answer, opts)
 	return fmt.Sprintf(`<!doctype html>
 <html lang="id">
 <head>
@@ -225,6 +226,19 @@ func normalizeSubmissionText(s string) string {
 	}
 	out = applyFinalAnswerRegex(out)
 	out = removeInternalNoteBlocks(out)
+	return strings.TrimSpace(out)
+}
+
+func applyStudentIdentity(s string, opts Options) string {
+	out := s
+	out = strings.ReplaceAll(out, "[Isi Nama]", opts.StudentName)
+	out = strings.ReplaceAll(out, "[isi nama]", opts.StudentName)
+	out = strings.ReplaceAll(out, "[Isi NIM]", opts.StudentNIM)
+	out = strings.ReplaceAll(out, "[isi nim]", opts.StudentNIM)
+	out = regexp.MustCompile(`(?im)^\s*Dosen\s*:\s*\[Isi Nama Dosen\]\s*$`).ReplaceAllString(out, "")
+	out = regexp.MustCompile(`(?im)^\s*Dosen\s*:\s*\[isi nama dosen\]\s*$`).ReplaceAllString(out, "")
+	out = strings.ReplaceAll(out, "[Isi Nama Dosen]", "Bapak/Ibu Dosen")
+	out = strings.ReplaceAll(out, "[isi nama dosen]", "Bapak/Ibu Dosen")
 	return strings.TrimSpace(out)
 }
 
