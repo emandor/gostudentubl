@@ -59,7 +59,28 @@ func Generate(ctx context.Context, ev notify.NotificationEvent, review notify.Dr
 	if err := os.WriteFile(manifestPath, []byte(buildManifest(ev, opts, kind)), 0o644); err != nil {
 		return Result{}, err
 	}
-	cmd := exec.CommandContext(ctx, opts.ChromiumPath, "--headless", "--no-sandbox", "--disable-gpu", "--no-pdf-header-footer", "--print-to-pdf="+pdfPath, "file://"+htmlPath)
+	chromeConfigDir, err := os.MkdirTemp("", "gostudentubl-chromium-config-*")
+	if err != nil {
+		return Result{HTMLPath: htmlPath, PDFPath: pdfPath, ManifestPath: manifestPath, Kind: kind}, fmt.Errorf("create chromium config dir: %w", err)
+	}
+	defer os.RemoveAll(chromeConfigDir)
+	chromeProfileDir, err := os.MkdirTemp("", "gostudentubl-chromium-profile-*")
+	if err != nil {
+		return Result{HTMLPath: htmlPath, PDFPath: pdfPath, ManifestPath: manifestPath, Kind: kind}, fmt.Errorf("create chromium profile dir: %w", err)
+	}
+	defer os.RemoveAll(chromeProfileDir)
+
+	cmd := exec.CommandContext(ctx, opts.ChromiumPath,
+		"--headless",
+		"--no-sandbox",
+		"--disable-gpu",
+		"--disable-dev-shm-usage",
+		"--no-pdf-header-footer",
+		"--user-data-dir="+chromeProfileDir,
+		"--print-to-pdf="+pdfPath,
+		"file://"+htmlPath,
+	)
+	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+chromeConfigDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return Result{HTMLPath: htmlPath, PDFPath: pdfPath, ManifestPath: manifestPath, Kind: kind}, fmt.Errorf("chromium pdf failed: %w: %s", err, string(out))
