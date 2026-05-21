@@ -35,22 +35,33 @@ type Runner struct {
 	CurrentPeriode   string
 	MaxCoursesPerRun int
 
-	NotificationStore         *notify.NotificationStore
-	NotificationBatchLimit    int
-	NotificationRetentionDays int
-	DetailFetchEnabled        bool
-	DetailFetchLimit          int
-	SuggestionEnabled         bool
-	SuggestionLimit           int
-	LLMClient                 llm.LLMClient
-	DraftEnabled              bool
-	DraftSolver               string
-	DraftLimit                int
-	DraftTmuxSession          string
-	Solver                    solver.Solver
-	MultiSolver               *solver.MultiSolver
-	RunLockEnabled            bool
-	RunLockTTL                time.Duration
+	NotificationStore             *notify.NotificationStore
+	NotificationBatchLimit        int
+	NotificationRetentionDays     int
+	DetailFetchEnabled            bool
+	DetailFetchLimit              int
+	SuggestionEnabled             bool
+	SuggestionLimit               int
+	LLMClient                     llm.LLMClient
+	DraftEnabled                  bool
+	DraftSolver                   string
+	DraftLimit                    int
+	DraftTmuxSession              string
+	Solver                        solver.Solver
+	MultiSolver                   *solver.MultiSolver
+	RunLockEnabled                bool
+	RunLockTTL                    time.Duration
+	MaterialSyncEnabled           bool
+	MaterialSyncLimit             int
+	MaterialCacheDir              string
+	MaterialMaxFileMB             int
+	PDFGenerationEnabled          bool
+	PDFCacheDir                   string
+	PDFStudentName                string
+	PDFStudentNIM                 string
+	ChromiumPath                  string
+	SubmissionEnabled             bool
+	SubmissionDeadlineWindowHours int
 
 	sendWhatsApp func([]notify.GroupMessage) error
 }
@@ -191,6 +202,12 @@ func (r *Runner) runAttendance(ctx context.Context, stats *runStats) error {
 		return nil
 	}
 
+	if r.MaterialSyncEnabled && r.NotificationStore != nil {
+		if err := r.syncCourseMaterials(ctx, filteredCourses); err != nil {
+			r.Log.Warn().Err(err).Msg("course material sync pipeline")
+		}
+	}
+
 	if err := r.fetchAssignmentsAndQuizzes(ctx, filteredCourses, stats); err != nil {
 		r.Log.Warn().Err(err).Msg("assignment/quiz notification pipeline")
 	}
@@ -220,6 +237,24 @@ func (r *Runner) runAttendance(ctx context.Context, stats *runStats) error {
 	if r.DraftEnabled && (r.MultiSolver != nil || r.Solver != nil) && r.NotificationStore != nil {
 		if err := r.processDraftsWithStats(ctx, stats); err != nil {
 			r.Log.Warn().Err(err).Msg("draft solver pipeline")
+		}
+	}
+
+	if r.NotificationStore != nil {
+		if err := r.processDraftReviews(ctx); err != nil {
+			r.Log.Warn().Err(err).Msg("draft review pipeline")
+		}
+	}
+
+	if r.PDFGenerationEnabled && r.NotificationStore != nil {
+		if err := r.processPDFArtifacts(ctx); err != nil {
+			r.Log.Warn().Err(err).Msg("pdf artifact pipeline")
+		}
+	}
+
+	if r.NotificationStore != nil {
+		if err := r.processApprovedSubmissions(ctx, now); err != nil {
+			r.Log.Warn().Err(err).Msg("approved submission pipeline")
 		}
 	}
 

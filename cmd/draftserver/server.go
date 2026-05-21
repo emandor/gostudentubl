@@ -35,6 +35,7 @@ func newServer(cfg config, db *sql.DB) *server {
 	mux.HandleFunc("GET /open", s.handleListOpen)
 	mux.HandleFunc("GET /open/{id}", s.handleViewOpen)
 	mux.HandleFunc("POST /admin/open/{id}", s.requireAuth(s.handleMarkOpen))
+	mux.HandleFunc("POST /admin/approve-pdf/{id}", s.requireAuth(s.handleApprovePDF))
 	mux.HandleFunc("GET /runs", s.requireAuth(s.handleRuns))
 	mux.HandleFunc("GET /audit", s.requireAuth(s.handleAudit))
 	s.mux = mux
@@ -153,6 +154,28 @@ func (s *server) initOperationalTables() {
 		error TEXT NOT NULL DEFAULT ''
 	)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_automation_runs_started_at ON automation_runs(started_at DESC)`)
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS draft_reviews (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		event_id INTEGER NOT NULL UNIQUE,
+		status TEXT NOT NULL DEFAULT '',
+		score INTEGER NOT NULL DEFAULT 0,
+		notes TEXT NOT NULL DEFAULT '',
+		reviewed_text TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '',
+		tokens_used INTEGER NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL DEFAULT ''
+	)`)
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS submission_artifacts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		event_id INTEGER NOT NULL UNIQUE,
+		status TEXT NOT NULL DEFAULT '',
+		pdf_path TEXT NOT NULL DEFAULT '',
+		html_path TEXT NOT NULL DEFAULT '',
+		approved INTEGER NOT NULL DEFAULT 0,
+		approved_at TEXT NOT NULL DEFAULT '',
+		generated_at TEXT NOT NULL DEFAULT '',
+		error TEXT NOT NULL DEFAULT ''
+	)`)
 }
 
 // suspiciousPatterns are path substrings that indicate scanning / attack attempts.
@@ -417,6 +440,25 @@ func (s *server) handleMarkOpen(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/drafts", http.StatusFound)
 }
 
+func (s *server) handleApprovePDF(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = s.db.ExecContext(r.Context(), `
+		UPDATE submission_artifacts
+		SET approved = 1, approved_at = ?
+		WHERE event_id = ? AND status = 'ready'`,
+		now, id)
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, fmt.Sprintf("/drafts/%d", id), http.StatusFound)
+}
+
 func (s *server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	runs, err := s.queryRuns(100)
 	if err != nil {
@@ -469,6 +511,28 @@ type draftRow struct {
 	RawContent     string
 	ProvidersList  string        // comma-separated successful providers from draft_results
 	Results        []draftResult // per-provider results (only loaded for detail page)
+	Review         reviewRow
+	Artifact       artifactRow
+}
+
+type reviewRow struct {
+	Status     string
+	Score      int
+	Notes      string
+	Reviewed   string
+	Model      string
+	TokensUsed int
+	UpdatedAt  string
+}
+
+type artifactRow struct {
+	Status      string
+	PDFPath     string
+	HTMLPath    string
+	Approved    bool
+	ApprovedAt  string
+	GeneratedAt string
+	Error       string
 }
 
 type dashboardSummary struct {
@@ -596,6 +660,17 @@ func (s *server) queryDraftByID(id int64) (draftRow, error) {
 		}
 	}
 	// err != nil means table doesn't exist yet — ignore silently.
+	_ = s.db.QueryRow(`
+		SELECT status, score, notes, reviewed_text, model, tokens_used, updated_at
+		FROM draft_reviews WHERE event_id = ?`, id).
+		Scan(&d.Review.Status, &d.Review.Score, &d.Review.Notes, &d.Review.Reviewed, &d.Review.Model, &d.Review.TokensUsed, &d.Review.UpdatedAt)
+	var approved int
+	if err := s.db.QueryRow(`
+		SELECT status, pdf_path, html_path, approved, approved_at, generated_at, error
+		FROM submission_artifacts WHERE event_id = ?`, id).
+		Scan(&d.Artifact.Status, &d.Artifact.PDFPath, &d.Artifact.HTMLPath, &approved, &d.Artifact.ApprovedAt, &d.Artifact.GeneratedAt, &d.Artifact.Error); err == nil {
+		d.Artifact.Approved = approved == 1
+	}
 
 	return d, nil
 }
@@ -860,6 +935,42 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
 </details>`, escHTML(d.RawContent))
 	}
 
+	reviewHTML := ""
+	if d.Review.Status != "" {
+		reviewed := renderMarkdown(d.Review.Reviewed)
+		if reviewed == "" {
+			reviewed = `<p class="muted">Belum ada final reviewed answer.</p>`
+		}
+		reviewHTML = fmt.Sprintf(`
+<section class="panel">
+  <div class="panel-head"><h2>Reviewed answer</h2><span class="status-badge status-ready">score %d</span></div>
+  <p class="muted">%s • %d tokens • %s</p>
+  <details class="artifact"><summary>Review notes</summary><pre class="artifact-pre">%s</pre></details>
+  <div class="draft-body">%s</div>
+</section>`, d.Review.Score, escHTML(d.Review.Model), d.Review.TokensUsed, escHTML(d.Review.UpdatedAt), escHTML(d.Review.Notes), reviewed)
+	}
+
+	pdfHTML := ""
+	if d.Artifact.Status != "" {
+		approved := "not approved"
+		if d.Artifact.Approved {
+			approved = "approved"
+		}
+		approveBtn := ""
+		if isAdmin && d.Artifact.Status == "ready" && !d.Artifact.Approved {
+			approveBtn = fmt.Sprintf(`<form method="POST" action="/admin/approve-pdf/%d" style="display:inline"><button class="btn btn-primary">Approve for submission</button></form>`, d.ID)
+		}
+		pdfHTML = fmt.Sprintf(`
+<section class="panel">
+  <div class="panel-head"><h2>PDF artifact</h2><span class="status-badge status-%s">%s</span></div>
+  <p class="muted">PDF: <code>%s</code></p>
+  <p class="muted">HTML: <code>%s</code></p>
+  <p class="muted">Approval: %s %s</p>
+  <p class="error-cell">%s</p>
+  %s
+</section>`, statusClass(d.Artifact.Status), escHTML(d.Artifact.Status), escHTML(d.Artifact.PDFPath), escHTML(d.Artifact.HTMLPath), escHTML(approved), escHTML(d.Artifact.ApprovedAt), escHTML(d.Artifact.Error), approveBtn)
+	}
+
 	// Build draft body — tab UI if we have multi-provider results, otherwise plain render.
 	var draftBodyHTML string
 	if len(d.Results) > 0 {
@@ -889,6 +1000,8 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
   </div>
   %s
   %s
+  %s
+  %s
 </div>`,
 		backPath,
 		escHTML(d.ItemName),
@@ -899,6 +1012,8 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
 		linkHTML,
 		escHTML(d.DraftUpdatedAt),
 		draftBodyHTML,
+		reviewHTML,
+		pdfHTML,
 		artifactHTML,
 	)
 	return pageWrap(d.ItemName+" – Draft", appShell(active, d.ItemName, "Draft detail", body, isAdmin))

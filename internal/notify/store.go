@@ -279,6 +279,9 @@ CREATE INDEX IF NOT EXISTS idx_automation_runs_status ON automation_runs(status)
 	if _, err := s.db.ExecContext(ctx, createAutomationRunsTable); err != nil {
 		return fmt.Errorf("migrate automation_runs: %w", err)
 	}
+	if err := s.initCourseworkTables(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 

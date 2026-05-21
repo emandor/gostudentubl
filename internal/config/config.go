@@ -55,6 +55,22 @@ type Config struct {
 	DailySummaryEnabled bool   `env:"DAILY_SUMMARY_ENABLED"`
 	CronDailySummary    string `env:"CRON_DAILY_SUMMARY"`
 
+	MaterialSyncEnabled bool   `env:"MATERIAL_SYNC_ENABLED"`
+	MaterialSyncLimit   int    `env:"MATERIAL_SYNC_LIMIT"`
+	MaterialCacheDir    string `env:"MATERIAL_CACHE_DIR"`
+	MaterialMaxFileMB   int    `env:"MATERIAL_MAX_FILE_MB"`
+
+	PDFGenerationEnabled bool   `env:"PDF_GENERATION_ENABLED"`
+	PDFCacheDir          string `env:"PDF_CACHE_DIR"`
+	PDFTemplateName      string `env:"PDF_TEMPLATE_NAME"`
+	PDFStudentName       string `env:"PDF_STUDENT_NAME"`
+	PDFStudentNIM        string `env:"PDF_STUDENT_NIM"`
+	ChromiumPath         string `env:"CHROMIUM_PATH"`
+
+	SubmissionEnabled             bool `env:"SUBMISSION_ENABLED"`
+	SubmissionAutoApprovedOnly    bool `env:"SUBMISSION_AUTO_APPROVED_ONLY"`
+	SubmissionDeadlineWindowHours int  `env:"SUBMISSION_DEADLINE_WINDOW_HOURS"`
+
 	CronWeekday string `env:"CRON_WEEKDAY"`
 	CronWeekend string `env:"CRON_WEEKEND"`
 
@@ -68,34 +84,47 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Timezone:                  "Asia/Jakarta",
-		CronWeekday:               "1 8,12,13,14,19 * * 1-5",
-		CronWeekend:               "0 8,9,11,14,16 * * 6",
-		PeriodeMode:               "auto",
-		Concurrency:               4,
-		RatePerSec:                1,
-		RateBurst:                 2,
-		MaxCoursesPerRun:          0,
-		NotificationDBPath:        "notifications.db",
-		NotificationBatchLimit:    100,
-		NotificationRetentionDays: 30,
-		DetailFetchEnabled:        true,
-		DetailFetchLimit:          10,
-		OpenRouterEndpoint:        "https://openrouter.ai/api/v1/chat/completions",
-		OpenRouterModel:           "anthropic/claude-sonnet-4-20250514",
-		SuggestionEnabled:         false,
-		SuggestionLimit:           5,
-		DraftEnabled:              true,
-		DraftSolver:               "openrouter-with-copilot-fallback",
-		DraftProviders:            "copilot,openrouter,codex",
-		DraftRetryMax:             2,
-		DraftLimit:                3,
-		DraftTmuxSession:          "copilot-solver",
-		RunLockEnabled:            true,
-		RunLockTTLMinutes:         15,
-		DailySummaryEnabled:       true,
-		CronDailySummary:          "30 21 * * *",
-		RequestTimeoutSec:         15,
+		Timezone:                      "Asia/Jakarta",
+		CronWeekday:                   "1 8,12,13,14,19 * * 1-5",
+		CronWeekend:                   "0 8,9,11,14,16 * * 6",
+		PeriodeMode:                   "auto",
+		Concurrency:                   4,
+		RatePerSec:                    1,
+		RateBurst:                     2,
+		MaxCoursesPerRun:              0,
+		NotificationDBPath:            "notifications.db",
+		NotificationBatchLimit:        100,
+		NotificationRetentionDays:     30,
+		DetailFetchEnabled:            true,
+		DetailFetchLimit:              10,
+		OpenRouterEndpoint:            "https://openrouter.ai/api/v1/chat/completions",
+		OpenRouterModel:               "anthropic/claude-sonnet-4-20250514",
+		SuggestionEnabled:             false,
+		SuggestionLimit:               5,
+		DraftEnabled:                  true,
+		DraftSolver:                   "openrouter-with-copilot-fallback",
+		DraftProviders:                "copilot,openrouter,codex",
+		DraftRetryMax:                 2,
+		DraftLimit:                    3,
+		DraftTmuxSession:              "copilot-solver",
+		RunLockEnabled:                true,
+		RunLockTTLMinutes:             15,
+		DailySummaryEnabled:           true,
+		CronDailySummary:              "30 21 * * *",
+		MaterialSyncEnabled:           true,
+		MaterialSyncLimit:             5,
+		MaterialCacheDir:              "materials",
+		MaterialMaxFileMB:             50,
+		PDFGenerationEnabled:          true,
+		PDFCacheDir:                   "submissions",
+		PDFTemplateName:               "ubl_default",
+		PDFStudentName:                "Aris Kurniawan",
+		PDFStudentNIM:                 "2311510438",
+		ChromiumPath:                  "chromium",
+		SubmissionEnabled:             false,
+		SubmissionAutoApprovedOnly:    true,
+		SubmissionDeadlineWindowHours: 2,
+		RequestTimeoutSec:             15,
 	}
 	if err := env.Parse(&cfg); err != nil {
 		return cfg, err

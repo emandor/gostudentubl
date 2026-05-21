@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tzdata sudo && \
+    ca-certificates tzdata sudo chromium fonts-dejavu && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd -g 1000 app && \
     useradd -r -u 1000 -g 1000 -s /sbin/nologin -m -d /home/app app && \
@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 RUN chown -R app:app /app
 COPY --from=builder /out/gostudentubl /usr/local/bin/gostudentubl
+COPY assets ./assets
 
 USER app
 ENTRYPOINT ["/usr/local/bin/gostudentubl"]
