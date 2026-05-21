@@ -469,20 +469,23 @@ func (s *server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := strings.ToLower(strings.TrimSpace(r.PathValue("kind")))
-	if kind != "pdf" && kind != "html" {
+	if kind != "pdf" && kind != "html" && kind != "manifest" {
 		http.Error(w, "invalid artifact kind", http.StatusBadRequest)
 		return
 	}
 
 	var relPath string
 	column := "pdf_path"
-	if kind == "html" {
+	if kind == "html" || kind == "manifest" {
 		column = "html_path"
 	}
-	query := fmt.Sprintf("SELECT %s FROM submission_artifacts WHERE event_id = ? AND status IN ('ready','html_ready')", column)
+	query := fmt.Sprintf("SELECT %s FROM submission_artifacts WHERE event_id = ? AND status IN ('ready','html_ready','legacy_manual_pdf')", column)
 	if err := s.db.QueryRowContext(r.Context(), query, id).Scan(&relPath); err != nil || strings.TrimSpace(relPath) == "" {
 		http.Error(w, "artifact not found", http.StatusNotFound)
 		return
+	}
+	if kind == "manifest" {
+		relPath = filepath.Join(filepath.Dir(relPath), "submission_manifest.md")
 	}
 
 	fullPath, ok := s.safeArtifactPath(relPath)
@@ -496,7 +499,9 @@ func (s *server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	if kind == "pdf" {
 		w.Header().Set("Content-Type", "application/pdf")
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="draft-%d.pdf"`, id))
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="submission-%d.pdf"`, id))
+	} else if kind == "manifest" {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	} else {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	}
@@ -1029,6 +1034,7 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
 		}
 		if d.Artifact.HTMLPath != "" {
 			artifactLinks += fmt.Sprintf(` <a class="btn btn-ghost" href="/artifacts/%d/html" target="_blank" rel="noopener">Open HTML</a>`, d.ID)
+			artifactLinks += fmt.Sprintf(` <a class="btn btn-ghost" href="/artifacts/%d/manifest" target="_blank" rel="noopener">Manifest</a>`, d.ID)
 		}
 		approveBtn := ""
 		if isAdmin && d.Artifact.Status == "ready" && !d.Artifact.Approved {
@@ -1036,7 +1042,7 @@ func draftDetailPage(d draftRow, isAdmin bool) string {
 		}
 		pdfHTML = fmt.Sprintf(`
 <section class="panel">
-  <div class="panel-head"><h2>PDF artifact</h2><span class="status-badge status-%s">%s</span></div>
+  <div class="panel-head"><h2>Submission artifact</h2><span class="status-badge status-%s">%s</span></div>
   <div class="toolbar">%s</div>
   <p class="muted">PDF: <code>%s</code></p>
   <p class="muted">HTML: <code>%s</code></p>

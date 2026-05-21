@@ -214,7 +214,7 @@ func (s *NotificationStore) ListReviewedNeedingPDF(ctx context.Context, limit in
 	rows, err := s.db.QueryContext(ctx, `
 SELECT ne.id, ne.event_type, ne.course_id, ne.course_name, ne.item_title, ne.item_name, ne.item_link, ne.item_id, ne.due_date, ne.submission_status, ne.grade, ne.due_date_parsed, ne.draft_status, ne.draft_text, ne.draft_provider, ne.draft_model, COALESCE(ne.draft_updated_at,''), COALESCE(idt.raw_content,'')
 FROM notification_events ne
-JOIN draft_reviews dr ON dr.event_id=ne.id AND dr.status IN ('ready','reviewed') AND dr.reviewed_text<>''
+JOIN draft_reviews dr ON dr.event_id=ne.id AND dr.status = 'finalized' AND dr.reviewed_text<>''
 LEFT JOIN submission_artifacts sa ON sa.event_id=ne.id
 LEFT JOIN item_details idt ON idt.event_id=ne.id
 WHERE COALESCE(sa.status,'') NOT IN ('ready')

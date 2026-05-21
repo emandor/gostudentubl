@@ -35,13 +35,21 @@ func (r *Runner) processDraftReviews(ctx context.Context) error {
 	for _, item := range items {
 		materials, _ := r.NotificationStore.ListCourseMaterials(ctx, item.CourseID, 8)
 		corpus := buildCorpus(materials, 3500)
-		prompt := fmt.Sprintf(`Review and improve this coursework draft using the course materials.
+		prompt := fmt.Sprintf(`Finalisasi jawaban tugas berikut menjadi naskah siap dikumpulkan kepada dosen.
+
+Peran dan sudut pandang:
+- Tulis sebagai mahasiswa kepada dosen, bukan sebagai reviewer/asisten.
+- Jangan menyebut "draft", "referensi", "template", "AI", "review", atau instruksi internal.
+- Jangan menulis catatan seperti "jika dosen memberi angka berbeda" kecuali memang menjadi bagian substansi jawaban.
+- Jika tugas meminta kode/program/aplikasi, hasil akhir tetap berupa penjelasan siap PDF dan sebutkan lampiran program secara wajar.
+- Pertahankan rumus, tabel, langkah hitung, dan kode yang memang perlu dikumpulkan.
+
 Return in this exact structure:
 SCORE: <0-100>
 NOTES:
-- concise findings
+- catatan validasi singkat untuk internal sistem, bukan untuk PDF
 FINAL:
-<final answer in Indonesian, ready to submit>
+<jawaban final dalam Bahasa Indonesia, siap dikumpulkan kepada dosen>
 
 Course: %s
 Item: %s
@@ -53,21 +61,21 @@ Assignment/quiz content:
 Course materials:
 %s
 
-Draft to review:
+Draft answer to finalize:
 %s`, item.CourseName, item.ItemName, item.DueDate, item.RawContent, corpus, item.DraftText)
-		resp, err := r.LLMClient.GetSuggestion(ctx, llm.SuggestionRequest{EventType: item.EventType, CourseName: item.CourseName, ItemName: item.ItemName, ItemTitle: "Draft review", Content: prompt, MaxTokens: 1200})
+		resp, err := r.LLMClient.GetSuggestion(ctx, llm.SuggestionRequest{EventType: item.EventType, CourseName: item.CourseName, ItemName: item.ItemName, ItemTitle: "Submission finalization", Content: prompt, MaxTokens: 1200})
 		if err != nil {
-			r.Log.Warn().Err(err).Int64("event_id", item.ID).Msg("draft review failed")
+			r.Log.Warn().Err(err).Int64("event_id", item.ID).Msg("draft finalization failed")
 			continue
 		}
 		score, notes, final := parseReview(resp.Suggestion)
 		if strings.TrimSpace(final) == "" {
 			final = resp.Suggestion
 		}
-		if err := r.NotificationStore.UpsertDraftReview(ctx, notify.DraftReview{EventID: item.ID, Status: "ready", Score: score, Notes: notes, ReviewedText: final, Model: resp.Model, TokensUsed: resp.TokensUsed}); err != nil {
+		if err := r.NotificationStore.UpsertDraftReview(ctx, notify.DraftReview{EventID: item.ID, Status: "finalized", Score: score, Notes: notes, ReviewedText: final, Model: resp.Model, TokensUsed: resp.TokensUsed}); err != nil {
 			return err
 		}
-		r.Log.Info().Int64("event_id", item.ID).Int("score", score).Msg("draft reviewed")
+		r.Log.Info().Int64("event_id", item.ID).Int("score", score).Msg("draft finalized for submission")
 	}
 	return nil
 }

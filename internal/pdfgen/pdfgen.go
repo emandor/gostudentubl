@@ -25,8 +25,10 @@ type Options struct {
 }
 
 type Result struct {
-	HTMLPath string
-	PDFPath  string
+	HTMLPath     string
+	PDFPath      string
+	ManifestPath string
+	Kind         string
 }
 
 func Generate(ctx context.Context, ev notify.NotificationEvent, review notify.DraftReview, opts Options) (Result, error) {
@@ -48,19 +50,24 @@ func Generate(ctx context.Context, ev notify.NotificationEvent, review notify.Dr
 	}
 	htmlPath := filepath.Join(dir, "answer.html")
 	pdfPath := filepath.Join(dir, "answer.pdf")
-	body := buildHTML(ev, review, opts)
+	manifestPath := filepath.Join(dir, "submission_manifest.md")
+	kind := ClassifySubmissionKind(ev, review)
+	body := buildHTML(ev, review, opts, kind)
 	if err := os.WriteFile(htmlPath, []byte(body), 0o644); err != nil {
 		return Result{}, err
 	}
-	cmd := exec.CommandContext(ctx, opts.ChromiumPath, "--headless", "--no-sandbox", "--disable-gpu", "--print-to-pdf="+pdfPath, "file://"+htmlPath)
+	if err := os.WriteFile(manifestPath, []byte(buildManifest(ev, opts, kind)), 0o644); err != nil {
+		return Result{}, err
+	}
+	cmd := exec.CommandContext(ctx, opts.ChromiumPath, "--headless", "--no-sandbox", "--disable-gpu", "--no-pdf-header-footer", "--print-to-pdf="+pdfPath, "file://"+htmlPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return Result{HTMLPath: htmlPath, PDFPath: pdfPath}, fmt.Errorf("chromium pdf failed: %w: %s", err, string(out))
+		return Result{HTMLPath: htmlPath, PDFPath: pdfPath, ManifestPath: manifestPath, Kind: kind}, fmt.Errorf("chromium pdf failed: %w: %s", err, string(out))
 	}
-	return Result{HTMLPath: htmlPath, PDFPath: pdfPath}, nil
+	return Result{HTMLPath: htmlPath, PDFPath: pdfPath, ManifestPath: manifestPath, Kind: kind}, nil
 }
 
-func buildHTML(ev notify.NotificationEvent, review notify.DraftReview, opts Options) string {
+func buildHTML(ev notify.NotificationEvent, review notify.DraftReview, opts Options, kind string) string {
 	logo := ""
 	if opts.LogoPath != "" {
 		if b, err := os.ReadFile(opts.LogoPath); err == nil {
@@ -95,6 +102,7 @@ func buildHTML(ev notify.NotificationEvent, review notify.DraftReview, opts Opti
     <p class="item-name">%s</p>
     <p><b>Nama:</b> %s</p>
     <p><b>NIM:</b> %s</p>
+    <p><b>Jenis Pengumpulan:</b> %s</p>
   </div>
 </header>
 <hr>
@@ -102,7 +110,74 @@ func buildHTML(ev notify.NotificationEvent, review notify.DraftReview, opts Opti
 </main>
 %s
 </body>
-</html>`, css, logoHTML(logo), escapeText(strings.ToUpper(ev.ItemTitle)), escapeText(ev.ItemName), escapeText(opts.StudentName), escapeText(opts.StudentNIM), renderAnswerMarkdown(answer), katexInit)
+</html>`, css, logoHTML(logo), escapeText(strings.ToUpper(ev.ItemTitle)), escapeText(ev.ItemName), escapeText(opts.StudentName), escapeText(opts.StudentNIM), escapeText(SubmissionKindLabel(kind)), renderAnswerMarkdown(answer), katexInit)
+}
+
+func ClassifySubmissionKind(ev notify.NotificationEvent, review notify.DraftReview) string {
+	text := strings.ToLower(strings.Join([]string{ev.ItemTitle, ev.ItemName, ev.RawContent, ev.DraftText, review.ReviewedText}, "\n"))
+	hasCode := containsAny(text, []string{"source code", "kode", "coding", "program", "python", "tensorflow", "keras", "cnn", "lenet", "preprocessing", ".py", ".ipynb", "csv", "matrik", "matrix"})
+	hasApp := containsAny(text, []string{"aplikasi", "application", "app", "web", "sistem", "project", "uas"})
+	hasDoc := containsAny(text, []string{"penjabaran", "jawaban", "rangkuman", "analisis", "laporan", "pdf", "ppt", "presentasi"})
+	switch {
+	case hasCode && hasApp:
+		return "application"
+	case hasCode && hasDoc:
+		return "mixed"
+	case hasCode:
+		return "code"
+	default:
+		return "document"
+	}
+}
+
+func SubmissionKindLabel(kind string) string {
+	switch kind {
+	case "application":
+		return "Dokumen jawaban + lampiran aplikasi/program"
+	case "code":
+		return "Dokumen jawaban + lampiran kode program"
+	case "mixed":
+		return "Dokumen penjabaran + lampiran kode/program"
+	default:
+		return "Dokumen jawaban"
+	}
+}
+
+func containsAny(s string, needles []string) bool {
+	for _, n := range needles {
+		if strings.Contains(s, n) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildManifest(ev notify.NotificationEvent, opts Options, kind string) string {
+	return fmt.Sprintf(`# Manifest Pengumpulan Tugas
+
+Nama: %s
+NIM: %s
+Mata Kuliah: %s
+Item: %s
+Jenis Pengumpulan: %s
+
+Berkas utama:
+- answer.pdf — dokumen jawaban siap dikumpulkan kepada dosen.
+
+Catatan paket:
+%s
+`, opts.StudentName, opts.StudentNIM, ev.CourseName, ev.ItemName, SubmissionKindLabel(kind), manifestNote(kind))
+}
+
+func manifestNote(kind string) string {
+	switch kind {
+	case "application":
+		return "Jika tugas mewajibkan aplikasi/program, lampirkan folder project atau arsip ZIP bersama answer.pdf. Pastikan README, source code, dan data contoh ikut disertakan bila diperlukan."
+	case "code", "mixed":
+		return "Jika tugas mewajibkan kode program, lampirkan file source code/notebook/dataset pendukung bersama answer.pdf sesuai instruksi dosen."
+	default:
+		return "Pengumpulan utama berupa dokumen jawaban PDF."
+	}
 }
 
 func normalizeSubmissionText(s string) string {
@@ -123,8 +198,37 @@ func normalizeSubmissionText(s string) string {
 	for _, r := range replacements {
 		out = strings.ReplaceAll(out, r.old, r.new)
 	}
+	out = applyFinalAnswerRegex(out)
 	out = removeInternalNoteBlocks(out)
 	return strings.TrimSpace(out)
+}
+
+func applyFinalAnswerRegex(s string) string {
+	replacements := []struct {
+		pattern string
+		repl    string
+	}{
+		{`(?im)^\s*#*\s*draf\s+solusi\s*(assignment|tugas)?\s*$`, `# Jawaban Tugas`},
+		{`(?im)^\s*#{1,6}\s*draf\s+solusi\s*[—-]\s*`, `## `},
+		{`(?i)\bdraf\s+solusi\s+referensi\b`, `jawaban`},
+		{`(?i)\bdraft\s+solusi\s+referensi\b`, `jawaban`},
+		{`(?i)\bdraf\s+referensi\b`, `jawaban`},
+		{`(?i)\bdraft\s+referensi\b`, `jawaban`},
+		{`(?i)\bdraf\s+solusi\b`, `jawaban`},
+		{`(?i)\bdraft\s+solusi\b`, `jawaban`},
+		{`(?i)\btemplate\s+komprehensif\b`, `jawaban`},
+		{`(?i)\btemplate\b`, `jawaban`},
+		{`(?i)\byang bisa dipakai sebagai referensi tugas akhir\b`, `untuk pengumpulan tugas akhir`},
+		{`(?i)\bbisa dipakai sebagai referensi\b`, `disusun sebagai jawaban`},
+		{`(?i)\bbisa langsung diadaptasi\b`, `digunakan dalam penyelesaian`},
+		{`(?i)\bsementara\b`, ``},
+		{`(?i)\bSaya bisa bantu menyusun\b`, `Berikut`},
+	}
+	out := s
+	for _, r := range replacements {
+		out = regexp.MustCompile(r.pattern).ReplaceAllString(out, r.repl)
+	}
+	return out
 }
 
 func removeInternalNoteBlocks(s string) string {
