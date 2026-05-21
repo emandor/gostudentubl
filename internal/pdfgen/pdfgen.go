@@ -51,6 +51,10 @@ func Generate(ctx context.Context, ev notify.NotificationEvent, review notify.Dr
 	htmlPath := filepath.Join(dir, "answer.html")
 	pdfPath := filepath.Join(dir, "answer.pdf")
 	manifestPath := filepath.Join(dir, "submission_manifest.md")
+	absHTMLPath, err := filepath.Abs(htmlPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("resolve html path: %w", err)
+	}
 	kind := ClassifySubmissionKind(ev, review)
 	body := buildHTML(ev, review, opts, kind)
 	if err := os.WriteFile(htmlPath, []byte(body), 0o644); err != nil {
@@ -78,7 +82,7 @@ func Generate(ctx context.Context, ev notify.NotificationEvent, review notify.Dr
 		"--no-pdf-header-footer",
 		"--user-data-dir="+chromeProfileDir,
 		"--print-to-pdf="+pdfPath,
-		"file://"+htmlPath,
+		"file://"+absHTMLPath,
 	)
 	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+chromeConfigDir)
 	out, err := cmd.CombinedOutput()
